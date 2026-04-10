@@ -226,6 +226,9 @@ async fn invoke_claude(
     working_dir: Option<&str>,
 ) -> Result<String> {
     let mut cmd = Command::new("claude");
+    // strip API key so claude always uses the team plan (interactive login),
+    // never accidentally burns personal API credits
+    cmd.env_remove("ANTHROPIC_API_KEY");
     cmd.arg("-p")
         .arg("--model").arg(model)
         .stdin(std::process::Stdio::piped())
