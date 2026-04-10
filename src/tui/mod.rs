@@ -136,7 +136,10 @@ fn draw(f: &mut Frame, app: &mut App) {
     if !app.runner_healthy {
         let warning = Line::from(vec![
             Span::styled(" ⚠ runner not detected ", Style::default().fg(Color::Black).bg(Color::Yellow)),
-            Span::styled(" — is `army-of-daemons run` running?", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!(" — is `{} run` running?", env!("CARGO_BIN_NAME")),
+                Style::default().fg(Color::Yellow),
+            ),
         ]);
         f.render_widget(warning, chunks[chunk_idx]);
         chunk_idx += 1;

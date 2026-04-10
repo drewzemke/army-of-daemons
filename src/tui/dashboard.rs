@@ -58,14 +58,11 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
         .iter()
         .map(|s| {
             let status = if s.unread_count == 0 {
-                Span::styled("ok", Style::default().fg(Color::Green))
+                format!("\u{2705} ok")
             } else {
                 let emoji = db::severity_emoji(s.max_severity);
                 let label = db::severity_label(s.max_severity);
-                Span::styled(
-                    format!("{emoji} {label}"),
-                    Style::default().fg(severity_color(s.max_severity)),
-                )
+                format!("{emoji} {label}")
             };
 
             let age = s.last_checked.map(|ts| {
@@ -100,16 +97,6 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     f.render_stateful_widget(table, area, &mut state.table_state);
-}
-
-fn severity_color(sev: i32) -> Color {
-    match sev {
-        5 => Color::Red,
-        4 => Color::Rgb(255, 165, 0),
-        3 => Color::Yellow,
-        2 => Color::Blue,
-        _ => Color::DarkGray,
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

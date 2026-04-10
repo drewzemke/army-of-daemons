@@ -69,10 +69,18 @@ impl Database {
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS seen_keys (
+                instance_id TEXT NOT NULL,
+                dedup_key TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_reports_dedup
                 ON reports(instance_id, dedup_key, created_at);
             CREATE INDEX IF NOT EXISTS idx_reports_unread
-                ON reports(is_read, severity, created_at);",
+                ON reports(is_read, severity, created_at);
+            CREATE INDEX IF NOT EXISTS idx_seen_keys
+                ON seen_keys(instance_id, dedup_key, created_at);",
         )?;
         Ok(db)
     }
@@ -163,12 +171,22 @@ impl Database {
         let conn = self.conn()?;
         let cutoff = chrono::Utc::now().timestamp() - window_secs;
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM reports
+            "SELECT COUNT(*) FROM seen_keys
              WHERE instance_id=?1 AND dedup_key=?2 AND created_at > ?3",
             params![instance_id, dedup_key, cutoff],
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    pub fn mark_seen(&self, instance_id: &str, dedup_key: &str) -> Result<()> {
+        let conn = self.conn()?;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO seen_keys (instance_id, dedup_key, created_at) VALUES (?1, ?2, ?3)",
+            params![instance_id, dedup_key, now],
+        )?;
+        Ok(())
     }
 
     pub fn mark_read(&self, report_id: i64) -> Result<()> {
@@ -304,9 +322,14 @@ impl Database {
     // -- pruning --
 
     pub fn prune(&self, older_than_days: u32) -> Result<usize> {
+        let conn = self.conn()?;
         let cutoff = chrono::Utc::now().timestamp() - (older_than_days as i64 * 86400);
-        let deleted = self.conn()?.execute(
+        let deleted = conn.execute(
             "DELETE FROM reports WHERE created_at < ?1",
+            params![cutoff],
+        )?;
+        conn.execute(
+            "DELETE FROM seen_keys WHERE created_at < ?1",
             params![cutoff],
         )?;
         Ok(deleted)

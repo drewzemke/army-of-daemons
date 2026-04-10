@@ -63,7 +63,6 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
                 db::severity_emoji(r.severity),
                 r.severity
             );
-            let sev_style = Style::default().fg(severity_color(r.severity));
 
             let time = chrono::DateTime::from_timestamp(r.created_at, 0)
                 .map(|dt| dt.format("%H:%M %b %d").to_string())
@@ -76,7 +75,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
             let read_marker = if r.is_read { "●" } else { "○" };
 
             Row::new(vec![
-                Cell::from(Span::styled(sev_str, sev_style)),
+                Cell::from(sev_str),
                 Cell::from(time),
                 Cell::from(title.to_string()),
                 Cell::from(read_marker),
@@ -98,14 +97,4 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     f.render_stateful_widget(table, area, &mut state.table_state);
-}
-
-fn severity_color(sev: i32) -> Color {
-    match sev {
-        5 => Color::Red,
-        4 => Color::Rgb(255, 165, 0),
-        3 => Color::Yellow,
-        2 => Color::Blue,
-        _ => Color::DarkGray,
-    }
 }

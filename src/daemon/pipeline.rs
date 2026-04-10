@@ -105,7 +105,12 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
                     Ok(true) => {
                         tracing::debug!(%instance_id, %key, "dedup hit, skipping");
                     }
-                    Ok(false) => kept.push(item),
+                    Ok(false) => {
+                        // mark as seen immediately so all items are tracked, not just
+                        // the one that ends up as the report's dedup_key
+                        let _ = db.mark_seen(instance_id, &key);
+                        kept.push(item);
+                    }
                     Err(e) => {
                         tracing::warn!(%instance_id, err=%e, "dedup check failed, keeping item");
                         kept.push(item);
