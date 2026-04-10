@@ -30,7 +30,9 @@ pub async fn execute(
     let items = parse_output(&stdout, format)?;
 
     if items.len() > max_items {
-        Ok(items.into_iter().take(max_items).collect())
+        // keep the most recent items (end of list), drop oldest
+        let skip = items.len() - max_items;
+        Ok(items.into_iter().skip(skip).collect())
     } else {
         Ok(items)
     }

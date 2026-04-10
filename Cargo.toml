@@ -3,6 +3,10 @@ name = "army-of-daemons"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "army"
+path = "./src/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
