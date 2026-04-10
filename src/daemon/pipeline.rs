@@ -30,7 +30,8 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
             .map(|dt| dt.to_rfc3339())
             .unwrap_or_default(),
         None => {
-            let five_min_ago = chrono::Utc::now() - chrono::Duration::minutes(5);
+            // first run gets a 24h lookback so there's something to work with
+            let five_min_ago = chrono::Utc::now() - chrono::Duration::hours(24);
             five_min_ago.to_rfc3339()
         }
     };
@@ -75,7 +76,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     // 2. FILTER
     let filtered = if let Some(ref filter_config) = config.filter {
         let after_rules = crate::daemon::filter::apply_rules(items, &filter_config.rules);
-        tracing::info!(%instance_id, before=after_rules.len(), "after filter rules");
+        tracing::info!(%instance_id, count=after_rules.len(), "after filter rules");
 
         // dedup
         if let Some(ref dedup_key_template) = filter_config.dedup_key {
@@ -88,11 +89,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
 
             let mut kept = Vec::new();
             for item in after_rules {
-                let item_ctx = config::template::build_context_with_since(
-                    instance, &[item.clone()], run_count as u64, &since,
-                );
-                // for dedup key, we merge the item fields into context
-                let merged_ctx = merge_item_into_context(&item_ctx, &item);
+                let merged_ctx = merge_item_into_context(instance, &item, run_count as u64, &since);
                 let key = config::render_template(dedup_key_template, &merged_ctx)
                     .unwrap_or_default();
 
@@ -157,7 +154,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         .and_then(|f| f.dedup_key.as_ref())
         .and_then(|tmpl| {
             // use first item's fields for the dedup key
-            let item_ctx = merge_item_into_context(&analyze_ctx, &filtered[0]);
+            let item_ctx = merge_item_into_context(instance, &filtered[0], run_count as u64, &since);
             config::render_template(tmpl, &item_ctx).ok()
         });
     let source_json = serde_json::to_string(&filtered).ok();
@@ -261,31 +258,30 @@ async fn invoke_claude(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// merge item fields into a minijinja context so templates can reference
-/// top-level keys from the item directly (for dedup_key rendering)
-fn merge_item_into_context(base: &minijinja::Value, item: &Value) -> minijinja::Value {
-    use minijinja::Value as MjValue;
-    use std::collections::BTreeMap;
+/// build a template context that has both the instance variables and the item's
+/// fields available at the top level (for dedup_key rendering)
+fn merge_item_into_context(instance: &DaemonInstance, item: &Value, run_count: u64, since: &str) -> minijinja::Value {
+    use std::collections::HashMap;
 
-    // we need to overlay item fields onto the base context
-    let mut map: BTreeMap<String, MjValue> = BTreeMap::new();
+    let mut map: HashMap<String, minijinja::Value> = HashMap::new();
 
-    // extract base context keys (best effort)
-    if let Ok(iter) = base.try_iter() {
-        for key in iter {
-            let key_str = key.to_string();
-            if let Ok(val) = base.get_attr(&key_str) {
-                map.insert(key_str, val);
-            }
-        }
+    // magic variables
+    map.insert("since".into(), minijinja::Value::from(since.to_string()));
+    map.insert("daemon_name".into(), minijinja::Value::from(instance.daemon_name.clone()));
+    map.insert("instance_id".into(), minijinja::Value::from(instance.instance_id.clone()));
+    map.insert("run_number".into(), minijinja::Value::from(run_count));
+
+    // params
+    for (k, v) in &instance.params {
+        map.insert(k.clone(), minijinja::Value::from(v.clone()));
     }
 
-    // overlay item fields
+    // overlay item fields at top level
     if let Value::Object(obj) = item {
         for (k, v) in obj {
-            map.insert(k.clone(), MjValue::from_serialize(v));
+            map.insert(k.clone(), minijinja::Value::from_serialize(v));
         }
     }
 
-    MjValue::from_serialize(&map)
+    minijinja::Value::from_serialize(&map)
 }
