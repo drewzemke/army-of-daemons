@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Padding, Row, Table, TableState};
 
 use crate::db::{self, Database, Report};
 
@@ -78,7 +78,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
             Row::new(vec![
                 Cell::from(Span::styled(sev_str, sev_style)),
                 Cell::from(time),
-                Cell::from(truncate(title, 40)),
+                Cell::from(title.to_string()),
                 Cell::from(read_marker),
             ])
         })
@@ -94,7 +94,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
     let title = format!(" {} ", state.instance_id);
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(Block::default().borders(Borders::ALL).title(title).padding(Padding::horizontal(1)))
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     f.render_stateful_widget(table, area, &mut state.table_state);
@@ -107,13 +107,5 @@ fn severity_color(sev: i32) -> Color {
         3 => Color::Yellow,
         2 => Color::Blue,
         _ => Color::DarkGray,
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max - 1])
     }
 }

@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Padding, Row, Table, TableState};
 
 use crate::db::{self, DaemonSummary, Database};
 
@@ -94,7 +94,8 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" army-of-daemons "),
+                .title(" army-of-daemons ")
+                .padding(Padding::horizontal(1)),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 

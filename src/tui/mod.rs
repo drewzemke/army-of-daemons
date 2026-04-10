@@ -185,7 +185,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
 
     let text: Vec<Line> = help.iter().map(|l| Line::from(*l)).collect();
     let para = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title(" Help "));
+        .block(Block::default().borders(Borders::ALL).title(" Help ").padding(ratatui::widgets::Padding::horizontal(1)));
     f.render_widget(para, area);
 }
 

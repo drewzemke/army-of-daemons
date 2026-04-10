@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 
 use crate::db::{self, Database, Report};
 
@@ -11,8 +11,11 @@ pub struct ReportState {
 
 impl ReportState {
     pub fn refresh(&mut self, db: &Database, report_id: i64) {
+        let is_same = self.report.as_ref().is_some_and(|r| r.id == report_id);
         self.report = db.get_report(report_id).unwrap_or(None);
-        self.scroll = 0;
+        if !is_same {
+            self.scroll = 0;
+        }
     }
 
     pub fn scroll_down(&mut self) {
@@ -69,7 +72,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
 
     let block_title = format!(" {} — {} ", report.instance_id, title_text);
     let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(block_title))
+        .block(Block::default().borders(Borders::ALL).title(block_title).padding(Padding::horizontal(1)))
         .wrap(Wrap { trim: false })
         .scroll((state.scroll, 0));
 

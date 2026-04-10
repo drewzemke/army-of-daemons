@@ -15,7 +15,7 @@ struct Cli {
     config_dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_dir = resolve_config_dir(cli.config_dir)?;
 
-    match cli.command {
+    match cli.command.unwrap_or(Commands::Tui) {
         Commands::Run => daemon::runner::run(&config_dir).await,
         Commands::Tui => tui::run(&config_dir).await,
         Commands::Status => {
