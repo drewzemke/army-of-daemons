@@ -81,12 +81,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
 
 /// minimal markdown styling — headers get bold, code blocks get dim
 fn style_markdown_line(line: &str) -> Line<'static> {
-    if line.starts_with("### ") {
-        Line::from(Span::styled(
-            line.to_string(),
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
-        ))
-    } else if line.starts_with("## ") {
+    if line.starts_with("## ") || line.starts_with("### ") {
         Line::from(Span::styled(
             line.to_string(),
             Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),

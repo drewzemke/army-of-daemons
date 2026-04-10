@@ -289,7 +289,7 @@ async fn watch_configs(
 
 enum Schedule {
     Interval(std::time::Duration),
-    Cron(cron::Schedule),
+    Cron(Box<cron::Schedule>),
 }
 
 fn parse_schedule(s: &str) -> Result<Schedule> {
@@ -299,7 +299,7 @@ fn parse_schedule(s: &str) -> Result<Schedule> {
     } else {
         let schedule: cron::Schedule = s.parse()
             .map_err(|e| anyhow::anyhow!("invalid cron: {e}"))?;
-        Ok(Schedule::Cron(schedule))
+        Ok(Schedule::Cron(Box::new(schedule)))
     }
 }
 

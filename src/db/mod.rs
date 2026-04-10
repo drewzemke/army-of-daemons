@@ -27,6 +27,7 @@ pub struct Report {
 #[derive(Debug, Clone)]
 pub struct DaemonSummary {
     pub instance_id: String,
+    #[allow(dead_code)]
     pub daemon_name: String,
     pub unread_count: i64,
     pub max_severity: i32,
@@ -147,6 +148,7 @@ impl Database {
 
     // -- reports --
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_report(
         &self,
         instance_id: &str,

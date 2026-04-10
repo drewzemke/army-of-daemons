@@ -50,6 +50,7 @@ impl Default for GlobalConfig {
 pub struct DaemonConfig {
     pub name: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub description: String,
     pub schedule: String,
     #[serde(default)]
@@ -59,6 +60,7 @@ pub struct DaemonConfig {
     pub filter: Option<FilterConfig>,
     pub analyze: AnalyzeConfig,
     #[serde(default)]
+    #[allow(dead_code)]
     pub report: ReportConfig,
 }
 
@@ -105,10 +107,12 @@ pub struct AnalyzeConfig {
     pub allowed_tools: Option<String>,
     pub prompt: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub timeout: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct ReportConfig {
     #[serde(default = "default_true")]
     pub notify: bool,
@@ -213,10 +217,10 @@ fn cartesian_product(lists: &[&Vec<String>]) -> Vec<Vec<String>> {
 
 /// resolve ~ and env vars in a path string
 pub fn resolve_path(s: &str) -> PathBuf {
-    if s.starts_with("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(&s[2..]);
-        }
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
     PathBuf::from(s)
 }
@@ -224,14 +228,14 @@ pub fn resolve_path(s: &str) -> PathBuf {
 /// parse a duration string like "every 60s", "every 5m", "30m", "1h"
 pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
     let s = s.strip_prefix("every ").unwrap_or(s).trim();
-    let (num_str, unit) = if s.ends_with("ms") {
-        (&s[..s.len() - 2], "ms")
-    } else if s.ends_with('s') {
-        (&s[..s.len() - 1], "s")
-    } else if s.ends_with('m') {
-        (&s[..s.len() - 1], "m")
-    } else if s.ends_with('h') {
-        (&s[..s.len() - 1], "h")
+    let (num_str, unit) = if let Some(n) = s.strip_suffix("ms") {
+        (n, "ms")
+    } else if let Some(n) = s.strip_suffix('s') {
+        (n, "s")
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, "m")
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, "h")
     } else {
         bail!("unknown duration unit in: {s}");
     };

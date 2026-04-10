@@ -96,10 +96,10 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, ap
         terminal.draw(|f| draw(f, app))?;
 
         let timeout = tick_rate.saturating_sub(last_refresh.elapsed());
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(app, key);
-            }
+        if event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key(app, key);
         }
 
         if last_refresh.elapsed() >= tick_rate {
@@ -293,11 +293,11 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
             app.refresh();
         }
         KeyCode::Char('y') => {
-            if let Some(id) = app.detail.selected_report_id() {
-                if let Ok(Some(report)) = app.db.get_report(id) {
-                    let text = format!("report:{}", report.id);
-                    copy_to_clipboard(&text);
-                }
+            if let Some(id) = app.detail.selected_report_id()
+                && let Ok(Some(report)) = app.db.get_report(id)
+            {
+                let text = format!("report:{}", report.id);
+                copy_to_clipboard(&text);
             }
         }
         _ => {}

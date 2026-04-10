@@ -58,7 +58,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
         .iter()
         .map(|s| {
             let status = if s.unread_count == 0 {
-                format!("\u{2705} ok")
+                "\u{2705} ok".to_string()
             } else {
                 let emoji = db::severity_emoji(s.max_severity);
                 let label = db::severity_label(s.max_severity);
