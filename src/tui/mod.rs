@@ -254,7 +254,7 @@ fn handle_dashboard_key(app: &mut App, key: event::KeyEvent) {
                 // spawn check in background
                 let config_dir = app.config_dir.clone();
                 tokio::spawn(async move {
-                    let _ = tokio::process::Command::new("army-of-daemons")
+                    let _ = tokio::process::Command::new(env!("CARGO_BIN_NAME"))
                         .arg("check")
                         .arg(&id)
                         .arg("--config-dir")
