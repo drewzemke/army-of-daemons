@@ -47,7 +47,10 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     let rendered_cmd = config::render_template(&config.source.command, &source_ctx)
         .context("rendering source command template")?;
 
-    let working_dir = config.working_directory.as_deref();
+    let working_dir = config.working_directory.as_deref()
+        .map(|wd| config::render_template(wd, &source_ctx))
+        .transpose()
+        .context("rendering working_directory template")?;
 
     // 1. SOURCE
     tracing::info!(%instance_id, cmd=%rendered_cmd, "executing source");
@@ -56,7 +59,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         &config.source.format,
         &config.source.success_codes,
         config.source.max_items,
-        working_dir,
+        working_dir.as_deref(),
     ).await {
         Ok(items) => items,
         Err(e) => {
@@ -144,7 +147,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
 
     tracing::info!(%instance_id, prompt_bytes=rendered_prompt.len(), %model, "invoking claude");
 
-    let analysis = match invoke_claude(&rendered_prompt, model, allowed_tools, working_dir).await {
+    let analysis = match invoke_claude(&rendered_prompt, model, allowed_tools, working_dir.as_deref()).await {
         Ok(text) => text,
         Err(e) => {
             tracing::error!(%instance_id, err=%e, "claude invocation failed");
