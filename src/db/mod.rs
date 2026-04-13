@@ -191,6 +191,20 @@ impl Database {
         Ok(())
     }
 
+    pub fn last_report_is_error(&self, instance_id: &str) -> Result<bool> {
+        let conn = self.conn()?;
+        let result = conn.query_row(
+            "SELECT is_error FROM reports WHERE instance_id=?1 ORDER BY created_at DESC LIMIT 1",
+            params![instance_id],
+            |row| row.get::<_, i32>(0),
+        );
+        match result {
+            Ok(v) => Ok(v != 0),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn mark_read(&self, report_id: i64) -> Result<()> {
         self.conn()?.execute("UPDATE reports SET is_read=1 WHERE id=?1", params![report_id])?;
         Ok(())

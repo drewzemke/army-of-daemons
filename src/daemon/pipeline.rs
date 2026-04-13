@@ -184,14 +184,11 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
 }
 
 fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {
-    // dedup errors by first 100 chars so we don't spam the same failure every cycle
-    let dedup_key = format!("error:{}", &message[..message.len().min(100)]);
-    let already_reported = db.check_dedup(instance_id, &dedup_key, 1800).unwrap_or(false); // 30min window
-    if already_reported {
+    // only report once per error state — skip if the most recent report is already an error
+    if db.last_report_is_error(instance_id)? {
         return Ok(());
     }
-    let _ = db.mark_seen(instance_id, &dedup_key);
-    db.insert_report(instance_id, 5, Some("daemon error"), Some(&dedup_key), message, None, true)?;
+    db.insert_report(instance_id, 5, Some("daemon error"), None, message, None, true)?;
     Ok(())
 }
 
