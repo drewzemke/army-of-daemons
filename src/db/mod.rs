@@ -231,6 +231,11 @@ impl Database {
         Ok(())
     }
 
+    pub fn mark_unread(&self, report_id: i64) -> Result<()> {
+        self.conn()?.execute("UPDATE reports SET is_read=0 WHERE id=?1", params![report_id])?;
+        Ok(())
+    }
+
     pub fn mark_all_read(&self, instance_id: &str) -> Result<()> {
         self.conn()?.execute(
             "UPDATE reports SET is_read=1 WHERE instance_id=?1 AND is_read=0",
