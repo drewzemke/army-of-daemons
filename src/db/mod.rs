@@ -49,7 +49,8 @@ impl Database {
                 params_json TEXT,
                 last_checked INTEGER,
                 last_run INTEGER,
-                run_count INTEGER DEFAULT 0
+                run_count INTEGER DEFAULT 0,
+                in_error INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS reports (
@@ -83,6 +84,10 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_seen_keys
                 ON seen_keys(instance_id, dedup_key, created_at);",
         )?;
+        // migration: add in_error column to existing instances tables
+        let _ = conn.execute_batch(
+            "ALTER TABLE instances ADD COLUMN in_error INTEGER DEFAULT 0;"
+        );
         Ok(db)
     }
 
@@ -191,10 +196,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn last_report_is_error(&self, instance_id: &str) -> Result<bool> {
+    pub fn is_in_error(&self, instance_id: &str) -> Result<bool> {
         let conn = self.conn()?;
         let result = conn.query_row(
-            "SELECT is_error FROM reports WHERE instance_id=?1 ORDER BY created_at DESC LIMIT 1",
+            "SELECT in_error FROM instances WHERE id=?1",
             params![instance_id],
             |row| row.get::<_, i32>(0),
         );
@@ -203,6 +208,14 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn set_error(&self, instance_id: &str, in_error: bool) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE instances SET in_error=?1 WHERE id=?2",
+            params![in_error as i32, instance_id],
+        )?;
+        Ok(())
     }
 
     pub fn mark_read(&self, report_id: i64) -> Result<()> {

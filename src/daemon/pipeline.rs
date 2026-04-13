@@ -69,6 +69,8 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         }
     };
 
+    // source succeeded — clear error state if it was set
+    db.set_error(instance_id, false)?;
     tracing::info!(%instance_id, count=items.len(), "source returned items");
 
     if items.is_empty() {
@@ -184,10 +186,10 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
 }
 
 fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {
-    // only report once per error state — skip if the most recent report is already an error
-    if db.last_report_is_error(instance_id)? {
+    if db.is_in_error(instance_id)? {
         return Ok(());
     }
+    db.set_error(instance_id, true)?;
     db.insert_report(instance_id, 5, Some("daemon error"), None, message, None, true)?;
     Ok(())
 }
