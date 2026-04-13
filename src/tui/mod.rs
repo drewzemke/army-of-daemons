@@ -163,8 +163,8 @@ fn draw(f: &mut Frame, app: &mut App) {
     let status_bar = chunks[chunk_idx];
     let help_text = match &app.view {
         View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
-        View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  y:copy path  Esc:back",
-        View::Report { .. } => " y:copy path  Y:copy content  r:read  u:unread  Esc:back",
+        View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  y:copy  Esc:back",
+        View::Report { .. } => " j/k:scroll  y:copy  r:read  u:unread  Esc:back",
     };
     let bar = Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)));
     f.render_widget(bar, status_bar);
@@ -303,8 +303,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
             if let Some(id) = app.detail.selected_report_id()
                 && let Ok(Some(report)) = app.db.get_report(id)
             {
-                let text = format!("report:{}", report.id);
-                copy_to_clipboard(&text);
+                copy_to_clipboard(&report.analysis);
             }
         }
         _ => {}
@@ -332,10 +331,6 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
             app.refresh();
         }
         KeyCode::Char('y') => {
-            let text = format!("report:{report_id}");
-            copy_to_clipboard(&text);
-        }
-        KeyCode::Char('Y') => {
             if let Some(ref report) = app.report.report {
                 copy_to_clipboard(&report.analysis);
             }
