@@ -211,10 +211,18 @@ impl Database {
     }
 
     pub fn set_error(&self, instance_id: &str, in_error: bool) -> Result<()> {
-        self.conn()?.execute(
+        let conn = self.conn()?;
+        conn.execute(
             "UPDATE instances SET in_error=?1 WHERE id=?2",
             params![in_error as i32, instance_id],
         )?;
+        // when recovering from error, auto-read the error reports
+        if !in_error {
+            conn.execute(
+                "UPDATE reports SET is_read=1 WHERE instance_id=?1 AND is_error=1 AND is_read=0",
+                params![instance_id],
+            )?;
+        }
         Ok(())
     }
 
