@@ -39,7 +39,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     let sev_label = db::severity_label(report.severity);
     let sev_emoji = db::severity_emoji(report.severity);
     let time = chrono::DateTime::from_timestamp(report.created_at, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default();
 
     let title_text = report.title.as_deref().unwrap_or("report");

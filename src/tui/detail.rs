@@ -65,7 +65,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
             );
 
             let time = chrono::DateTime::from_timestamp(r.created_at, 0)
-                .map(|dt| dt.format("%H:%M %b %d").to_string())
+                .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M %b %d").to_string())
                 .unwrap_or_else(|| "?".into());
 
             let title = r.title.as_deref().unwrap_or(
