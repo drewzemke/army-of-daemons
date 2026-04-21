@@ -45,6 +45,7 @@ All user config lives in `~/.daemon-army/`:
 db_path = "~/.daemon-army/army.db"
 log_path = "~/.daemon-army/runner.log"
 prune_after_days = 30
+display_after_days = 7  # hide reports older than this in the TUI / status line
 default_model = "sonnet"
 
 # default allowed tools for claude -p (can be overridden per daemon)

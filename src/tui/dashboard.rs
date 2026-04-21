@@ -10,8 +10,8 @@ pub struct DashboardState {
 }
 
 impl DashboardState {
-    pub fn refresh(&mut self, db: &Database) {
-        self.summaries = db.daemon_summaries().unwrap_or_default();
+    pub fn refresh(&mut self, db: &Database, display_after_days: u32) {
+        self.summaries = db.daemon_summaries(display_after_days).unwrap_or_default();
         // keep selection in bounds
         if let Some(sel) = self.table_state.selected() {
             if sel >= self.summaries.len() && !self.summaries.is_empty() {

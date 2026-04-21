@@ -21,6 +21,7 @@ enum View {
 pub struct App {
     db: Database,
     config_dir: std::path::PathBuf,
+    display_after_days: u32,
     view: View,
     dashboard: dashboard::DashboardState,
     detail: detail::DetailState,
@@ -33,10 +34,11 @@ pub struct App {
 }
 
 impl App {
-    fn new(db: Database, config_dir: std::path::PathBuf) -> Self {
+    fn new(db: Database, config_dir: std::path::PathBuf, display_after_days: u32) -> Self {
         Self {
             db,
             config_dir,
+            display_after_days,
             view: View::Dashboard,
             dashboard: dashboard::DashboardState::default(),
             detail: detail::DetailState::default(),
@@ -60,8 +62,8 @@ impl App {
         };
 
         match &self.view {
-            View::Dashboard => self.dashboard.refresh(&self.db),
-            View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id),
+            View::Dashboard => self.dashboard.refresh(&self.db, self.display_after_days),
+            View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id, self.display_after_days),
             View::Report { report_id } => self.report.refresh(&self.db, *report_id),
         }
     }
@@ -77,7 +79,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(db, config_dir.to_path_buf());
+    let mut app = App::new(db, config_dir.to_path_buf(), global.display_after_days);
     app.refresh();
 
     let result = run_loop(&mut terminal, &mut app).await;

@@ -73,9 +73,12 @@ The TUI reads from the same SQLite database. It can be opened and closed freely 
 db_path = "~/.daemon-army/army.db"
 log_path = "~/.daemon-army/runner.log"
 prune_after_days = 30
+display_after_days = 7
 default_model = "sonnet"
 default_allowed_tools = ""
 ```
+
+`display_after_days` hides reports older than this many days from the TUI and status line. They stay in the database until `prune_after_days` elapses (export still sees them).
 
 ## Daemon spec
 

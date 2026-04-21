@@ -15,6 +15,8 @@ pub struct GlobalConfig {
     pub log_path: PathBuf,
     #[serde(default = "default_prune_days")]
     pub prune_after_days: u32,
+    #[serde(default = "default_display_days")]
+    pub display_after_days: u32,
     #[serde(default = "default_model")]
     pub default_model: String,
     #[serde(default)]
@@ -28,6 +30,7 @@ fn default_log_path() -> PathBuf {
     dirs::home_dir().unwrap().join(".daemon-army/runner.log")
 }
 fn default_prune_days() -> u32 { 30 }
+fn default_display_days() -> u32 { 7 }
 fn default_model() -> String { "sonnet".into() }
 
 impl Default for GlobalConfig {
@@ -36,6 +39,7 @@ impl Default for GlobalConfig {
             db_path: default_db_path(),
             log_path: default_log_path(),
             prune_after_days: default_prune_days(),
+            display_after_days: default_display_days(),
             default_model: default_model(),
             default_allowed_tools: String::new(),
         }

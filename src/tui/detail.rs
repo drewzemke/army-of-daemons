@@ -11,9 +11,9 @@ pub struct DetailState {
 }
 
 impl DetailState {
-    pub fn refresh(&mut self, db: &Database, instance_id: &str) {
+    pub fn refresh(&mut self, db: &Database, instance_id: &str, display_after_days: u32) {
         self.instance_id = instance_id.to_string();
-        self.reports = db.list_reports(instance_id, 100).unwrap_or_default();
+        self.reports = db.list_reports(instance_id, 100, display_after_days).unwrap_or_default();
         if let Some(sel) = self.table_state.selected() {
             if sel >= self.reports.len() && !self.reports.is_empty() {
                 self.table_state.select(Some(self.reports.len() - 1));

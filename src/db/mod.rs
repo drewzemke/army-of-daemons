@@ -259,14 +259,15 @@ impl Database {
         }
     }
 
-    pub fn list_reports(&self, instance_id: &str, limit: usize) -> Result<Vec<Report>> {
+    pub fn list_reports(&self, instance_id: &str, limit: usize, display_after_days: u32) -> Result<Vec<Report>> {
         let conn = self.conn()?;
+        let cutoff = display_cutoff(display_after_days);
         let mut stmt = conn.prepare(
             "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, is_read, is_error
-             FROM reports WHERE instance_id=?1
-             ORDER BY created_at DESC LIMIT ?2",
+             FROM reports WHERE instance_id=?1 AND created_at > ?2
+             ORDER BY created_at DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![instance_id, limit], map_report)?;
+        let rows = stmt.query_map(params![instance_id, cutoff, limit], map_report)?;
         let mut reports = Vec::new();
         for row in rows {
             reports.push(row?);
@@ -276,18 +277,19 @@ impl Database {
 
     // -- dashboard queries --
 
-    pub fn daemon_summaries(&self) -> Result<Vec<DaemonSummary>> {
+    pub fn daemon_summaries(&self, display_after_days: u32) -> Result<Vec<DaemonSummary>> {
         let conn = self.conn()?;
+        let cutoff = display_cutoff(display_after_days);
         let mut stmt = conn.prepare(
             "SELECT i.id, i.daemon_name, i.last_checked,
                     COALESCE(SUM(CASE WHEN r.is_read=0 THEN 1 ELSE 0 END), 0) as unread,
                     COALESCE(MAX(CASE WHEN r.is_read=0 THEN r.severity ELSE 0 END), 0) as max_sev
              FROM instances i
-             LEFT JOIN reports r ON r.instance_id = i.id
+             LEFT JOIN reports r ON r.instance_id = i.id AND r.created_at > ?1
              GROUP BY i.id
              ORDER BY max_sev DESC, unread DESC, i.id",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![cutoff], |row| {
             Ok(DaemonSummary {
                 instance_id: row.get(0)?,
                 daemon_name: row.get(1)?,
@@ -305,14 +307,16 @@ impl Database {
 
     // -- status line --
 
-    pub fn status_line(&self) -> Result<String> {
+    pub fn status_line(&self, display_after_days: u32) -> Result<String> {
         let conn = self.conn()?;
+        let cutoff = display_cutoff(display_after_days);
         let mut stmt = conn.prepare(
             "SELECT severity, COUNT(*) FROM reports
-             WHERE is_read=0 GROUP BY severity ORDER BY severity DESC",
+             WHERE is_read=0 AND created_at > ?1
+             GROUP BY severity ORDER BY severity DESC",
         )?;
         let rows: Vec<(i32, i64)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -427,6 +431,10 @@ fn map_report(row: &rusqlite::Row) -> rusqlite::Result<Report> {
         is_read: row.get::<_, i32>(8)? != 0,
         is_error: row.get::<_, i32>(9)? != 0,
     })
+}
+
+fn display_cutoff(days: u32) -> i64 {
+    chrono::Utc::now().timestamp() - (days as i64 * 86400)
 }
 
 pub fn severity_emoji(sev: i32) -> &'static str {
