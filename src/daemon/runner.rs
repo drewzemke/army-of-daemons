@@ -28,7 +28,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // initial load
     let daemons = config::load_daemons(&config_dir)?;
-    let instances = expand_all(&daemons, global.max_instances)?;
+    let instances = expand_all(&daemons);
 
     tracing::info!(
         instance_count = instances.len(),
@@ -116,7 +116,7 @@ pub async fn check_one(config_dir: &Path, name: &str) -> Result<()> {
     let db = Database::open(&global.db_path)?;
     let daemons = config::load_daemons(config_dir)?;
 
-    let instances = expand_all(&daemons, global.max_instances)?;
+    let instances = expand_all(&daemons);
     let matching: Vec<_> = instances
         .iter()
         .filter(|i| i.instance_id == name || i.daemon_name == name)
@@ -136,18 +136,12 @@ pub async fn check_one(config_dir: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn expand_all(daemons: &[config::DaemonConfig], max: usize) -> Result<Vec<DaemonInstance>> {
+fn expand_all(daemons: &[config::DaemonConfig]) -> Vec<DaemonInstance> {
     let mut all = Vec::new();
     for d in daemons {
         all.extend(config::expand_instances(d));
     }
-    if all.len() > max {
-        bail!(
-            "total instances ({}) exceeds max_instances ({max})",
-            all.len()
-        );
-    }
-    Ok(all)
+    all
 }
 
 async fn start_instances(
@@ -254,30 +248,23 @@ async fn watch_configs(
 
         match config::load_daemons(&config_dir) {
             Ok(daemons) => {
-                match expand_all(&daemons, global.max_instances) {
-                    Ok(instances) => {
-                        // cancel all existing tasks
-                        let mut s = state.lock().await;
-                        for (id, handle) in s.tasks.drain() {
-                            tracing::info!(%id, "stopping for reload");
-                            handle.abort();
-                        }
-                        s.running.clear();
-                        drop(s);
-
-                        // brief pause for in-flight processes
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                        // restart
-                        start_instances(&instances, &state, &global, &db).await;
-                        tracing::info!(count = instances.len(), "reloaded");
-                        eprintln!("army-of-daemons: reloaded {} instances", instances.len());
-                    }
-                    Err(e) => {
-                        tracing::error!(err=%e, "reload failed (instance expansion)");
-                        eprintln!("army-of-daemons: reload failed: {e}");
-                    }
+                let instances = expand_all(&daemons);
+                // cancel all existing tasks
+                let mut s = state.lock().await;
+                for (id, handle) in s.tasks.drain() {
+                    tracing::info!(%id, "stopping for reload");
+                    handle.abort();
                 }
+                s.running.clear();
+                drop(s);
+
+                // brief pause for in-flight processes
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+                // restart
+                start_instances(&instances, &state, &global, &db).await;
+                tracing::info!(count = instances.len(), "reloaded");
+                eprintln!("army-of-daemons: reloaded {} instances", instances.len());
             }
             Err(e) => {
                 tracing::error!(err=%e, "reload failed (config parse)");

@@ -75,7 +75,6 @@ log_path = "~/.daemon-army/runner.log"
 prune_after_days = 30
 default_model = "sonnet"
 default_allowed_tools = ""
-max_instances = 20
 ```
 
 ## Daemon spec
@@ -200,8 +199,6 @@ env = ["staging", "prod"]
 ```
 
 This produces four instances: `my-daemon::api,staging`, `my-daemon::api,prod`, `my-daemon::web,staging`, `my-daemon::web,prod`. Each instance has its own schedule, dedup state, and reports.
-
-The total instance count across all daemons is capped by `max_instances` (default 20).
 
 ### Prompt requirements
 

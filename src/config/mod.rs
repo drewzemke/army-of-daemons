@@ -17,8 +17,6 @@ pub struct GlobalConfig {
     pub prune_after_days: u32,
     #[serde(default = "default_model")]
     pub default_model: String,
-    #[serde(default = "default_max_instances")]
-    pub max_instances: usize,
     #[serde(default)]
     pub default_allowed_tools: String,
 }
@@ -31,7 +29,6 @@ fn default_log_path() -> PathBuf {
 }
 fn default_prune_days() -> u32 { 30 }
 fn default_model() -> String { "sonnet".into() }
-fn default_max_instances() -> usize { 20 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
@@ -40,7 +37,6 @@ impl Default for GlobalConfig {
             log_path: default_log_path(),
             prune_after_days: default_prune_days(),
             default_model: default_model(),
-            max_instances: default_max_instances(),
             default_allowed_tools: String::new(),
         }
     }
@@ -251,7 +247,7 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
 }
 
 pub fn validate_all(config_dir: &Path) -> Result<()> {
-    let global = load_global(config_dir)?;
+    let _global = load_global(config_dir)?;
     let daemons = load_daemons(config_dir)?;
 
     if daemons.is_empty() {
@@ -285,13 +281,6 @@ pub fn validate_all(config_dir: &Path) -> Result<()> {
         }
     }
 
-    if total_instances > global.max_instances {
-        bail!(
-            "total instances ({total_instances}) exceeds max_instances ({})",
-            global.max_instances
-        );
-    }
-
-    println!("total instances: {total_instances} (max: {})", global.max_instances);
+    println!("total instances: {total_instances}");
     Ok(())
 }

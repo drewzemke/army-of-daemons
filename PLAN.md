@@ -46,7 +46,6 @@ db_path = "~/.daemon-army/army.db"
 log_path = "~/.daemon-army/runner.log"
 prune_after_days = 30
 default_model = "sonnet"
-max_instances = 20   # safety cap on total param-expanded instances across all daemons
 
 # default allowed tools for claude -p (can be overridden per daemon)
 default_allowed_tools = ""
@@ -137,8 +136,6 @@ Each instance has its own:
 - reports
 
 Multiple param keys produce a cartesian product: `name = ["a", "b"]` + `env = ["staging", "prod"]` = 4 instances.
-
-The total instance count across all daemons is capped by `max_instances` in global config (default 20). If the total exceeds this, the runner logs an error and refuses to start. The `validate` command also checks this.
 
 ### magic template variables
 
