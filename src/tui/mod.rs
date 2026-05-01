@@ -166,7 +166,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let help_text = match &app.view {
         View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
         View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  y:copy  Esc:back",
-        View::Report { .. } => " j/k:scroll  y:copy  r:read  u:unread  Esc:back",
+        View::Report { .. } => " j/k:scroll  s:source  y:copy  r:read  u:unread  Esc:back",
     };
     let bar = Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)));
     f.render_widget(bar, status_bar);
@@ -182,6 +182,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "r           mark report as read",
         "u           mark report as unread",
         "R           mark all read (this daemon)",
+        "s           toggle source data",
         "y           copy report content",
         "x           manually run daemon",
         "/           search / filter",
@@ -305,7 +306,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
             if let Some(id) = app.detail.selected_report_id()
                 && let Ok(Some(report)) = app.db.get_report(id)
             {
-                copy_to_clipboard(&report.analysis);
+                copy_to_clipboard(&report_view::format_report_text(&report));
             }
         }
         _ => {}
@@ -334,9 +335,10 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
         }
         KeyCode::Char('y') => {
             if let Some(ref report) = app.report.report {
-                copy_to_clipboard(&report.analysis);
+                copy_to_clipboard(&report_view::format_report_text(report));
             }
         }
+        KeyCode::Char('s') => app.report.toggle_source(),
         KeyCode::Char('j') | KeyCode::Down => app.report.scroll_down(),
         KeyCode::Char('k') | KeyCode::Up => app.report.scroll_up(),
         _ => {}

@@ -7,6 +7,7 @@ use crate::db::{self, Database, Report};
 pub struct ReportState {
     pub report: Option<Report>,
     pub scroll: u16,
+    pub show_source: bool,
 }
 
 impl ReportState {
@@ -24,6 +25,10 @@ impl ReportState {
 
     pub fn scroll_up(&mut self) {
         self.scroll = self.scroll.saturating_sub(3);
+    }
+
+    pub fn toggle_source(&mut self) {
+        self.show_source = !self.show_source;
     }
 }
 
@@ -61,6 +66,32 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
             "⚠ daemon error",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )));
+        lines.push(Line::from(""));
+    }
+
+    // source data section
+    if report.source_items_json.is_some() {
+        let dim = Style::default().fg(Color::DarkGray);
+        if state.show_source {
+            lines.push(Line::from(Span::styled(
+                "── Source Data (s to collapse) ──",
+                dim.add_modifier(Modifier::BOLD),
+            )));
+            if let Some(ref raw) = report.source_items_json {
+                let pretty = serde_json::from_str::<serde_json::Value>(raw)
+                    .and_then(|v| serde_json::to_string_pretty(&v))
+                    .unwrap_or_else(|_| raw.clone());
+                for line in pretty.lines() {
+                    lines.push(Line::from(Span::styled(line.to_string(), dim)));
+                }
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "── Source Data (s to expand) ──",
+                dim.add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::from(Span::styled("---", dim)));
         lines.push(Line::from(""));
     }
 
@@ -114,4 +145,17 @@ fn severity_color(sev: i32) -> Color {
         2 => Color::Blue,
         _ => Color::DarkGray,
     }
+}
+
+pub fn format_report_text(report: &Report) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref raw) = report.source_items_json {
+        let pretty = serde_json::from_str::<serde_json::Value>(raw)
+            .and_then(|v| serde_json::to_string_pretty(&v))
+            .unwrap_or_else(|_| raw.clone());
+        parts.push(pretty);
+        parts.push("---".to_string());
+    }
+    parts.push(report.analysis.clone());
+    parts.join("\n")
 }
