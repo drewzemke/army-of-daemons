@@ -10,9 +10,13 @@ pub struct DashboardState {
 }
 
 impl DashboardState {
-    pub fn refresh(&mut self, db: &Database, display_after_days: u32) {
-        self.summaries = db.daemon_summaries(display_after_days).unwrap_or_default();
-        // keep selection in bounds
+    pub fn refresh(&mut self, db: &Database, display_after_days: u32, query: &str) {
+        let mut summaries = db.daemon_summaries(display_after_days).unwrap_or_default();
+        if !query.is_empty() {
+            let q = query.to_lowercase();
+            summaries.retain(|s| s.instance_id.to_lowercase().contains(&q));
+        }
+        self.summaries = summaries;
         if let Some(sel) = self.table_state.selected() {
             if sel >= self.summaries.len() && !self.summaries.is_empty() {
                 self.table_state.select(Some(self.summaries.len() - 1));

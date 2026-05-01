@@ -61,9 +61,10 @@ impl App {
             _ => false,
         };
 
+        let q = &self.search_query;
         match &self.view {
-            View::Dashboard => self.dashboard.refresh(&self.db, self.display_after_days),
-            View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id, self.display_after_days),
+            View::Dashboard => self.dashboard.refresh(&self.db, self.display_after_days, q),
+            View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id, self.display_after_days, q),
             View::Report { report_id } => self.report.refresh(&self.db, *report_id),
         }
     }
@@ -163,12 +164,30 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     // status bar
     let status_bar = chunks[chunk_idx];
-    let help_text = match &app.view {
-        View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
-        View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  y:copy  Esc:back",
-        View::Report { .. } => " j/k:scroll  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
+    let bar = if app.search_mode {
+        Line::from(vec![
+            Span::styled(" /", Style::default().fg(Color::Yellow)),
+            Span::styled(&app.search_query, Style::default().fg(Color::White)),
+            Span::styled("▌", Style::default().fg(Color::Yellow)),
+        ])
+    } else if !app.search_query.is_empty() {
+        let hint = match &app.view {
+            View::Dashboard => " j/k:navigate  Enter:drill in  /:search  Esc:clear",
+            View::Detail { .. } => " j/k:navigate  Enter:view  /:search  Esc:clear+back",
+            View::Report { .. } => "",
+        };
+        Line::from(vec![
+            Span::styled(format!(" filter: {} ", app.search_query), Style::default().fg(Color::Yellow)),
+            Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        ])
+    } else {
+        let help_text = match &app.view {
+            View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
+            View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
+            View::Report { .. } => " j/k:scroll  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
+        };
+        Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
-    let bar = Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)));
     f.render_widget(bar, status_bar);
 }
 
@@ -213,16 +232,18 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
             KeyCode::Esc => {
                 app.search_mode = false;
                 app.search_query.clear();
+                app.refresh();
             }
             KeyCode::Enter => {
                 app.search_mode = false;
-                // apply filter (already stored in search_query)
             }
             KeyCode::Backspace => {
                 app.search_query.pop();
+                app.refresh();
             }
             KeyCode::Char(c) => {
                 app.search_query.push(c);
+                app.refresh();
             }
             _ => {}
         }
@@ -231,7 +252,10 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
 
     match key.code {
         KeyCode::Char('?') => app.show_help = true,
-        KeyCode::Char('/') => app.search_mode = true,
+        KeyCode::Char('/') if !matches!(app.view, View::Report { .. }) => {
+            app.search_mode = true;
+            return;
+        }
         _ => {}
     }
 
@@ -244,11 +268,16 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
 
 fn handle_dashboard_key(app: &mut App, key: event::KeyEvent) {
     match key.code {
+        KeyCode::Esc if !app.search_query.is_empty() => {
+            app.search_query.clear();
+            app.refresh();
+        }
         KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
         KeyCode::Char('j') | KeyCode::Down => app.dashboard.next(),
         KeyCode::Char('k') | KeyCode::Up => app.dashboard.prev(),
         KeyCode::Enter => {
             if let Some(id) = app.dashboard.selected_instance_id() {
+                app.search_query.clear();
                 app.view = View::Detail { instance_id: id };
                 app.refresh();
             }
@@ -275,6 +304,7 @@ fn handle_dashboard_key(app: &mut App, key: event::KeyEvent) {
 fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {
+            app.search_query.clear();
             app.view = View::Dashboard;
             app.refresh();
         }
@@ -283,6 +313,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
         KeyCode::Enter => {
             if let Some(id) = app.detail.selected_report_id() {
                 let _ = app.db.mark_read(id);
+                app.search_query.clear();
                 app.view = View::Report { report_id: id };
                 app.refresh();
             }
