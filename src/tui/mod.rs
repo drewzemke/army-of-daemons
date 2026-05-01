@@ -306,7 +306,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
             if let Some(id) = app.detail.selected_report_id()
                 && let Ok(Some(report)) = app.db.get_report(id)
             {
-                copy_to_clipboard(&report_view::format_report_text(&report));
+                copy_to_clipboard(&report.format_text());
             }
         }
         _ => {}
@@ -335,7 +335,7 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
         }
         KeyCode::Char('y') => {
             if let Some(ref report) = app.report.report {
-                copy_to_clipboard(&report_view::format_report_text(report));
+                copy_to_clipboard(&report.format_text());
             }
         }
         KeyCode::Char('s') => app.report.toggle_source(),

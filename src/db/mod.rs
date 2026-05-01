@@ -24,6 +24,21 @@ pub struct Report {
     pub is_error: bool,
 }
 
+impl Report {
+    pub fn format_text(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(ref raw) = self.source_items_json {
+            let pretty = serde_json::from_str::<serde_json::Value>(raw)
+                .and_then(|v| serde_json::to_string_pretty(&v))
+                .unwrap_or_else(|_| raw.clone());
+            parts.push(pretty);
+            parts.push("---".to_string());
+        }
+        parts.push(self.analysis.clone());
+        parts.join("\n")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DaemonSummary {
     pub instance_id: String,

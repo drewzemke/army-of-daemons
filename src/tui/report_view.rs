@@ -101,7 +101,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
         lines.push(styled);
     }
 
-    let block_title = format!(" {} — {} ", report.instance_id, title_text);
+    let block_title = format!(" #{} {} — {} ", report.id, report.instance_id, title_text);
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(block_title).padding(Padding::horizontal(1)))
         .wrap(Wrap { trim: false })
@@ -147,15 +147,3 @@ fn severity_color(sev: i32) -> Color {
     }
 }
 
-pub fn format_report_text(report: &Report) -> String {
-    let mut parts = Vec::new();
-    if let Some(ref raw) = report.source_items_json {
-        let pretty = serde_json::from_str::<serde_json::Value>(raw)
-            .and_then(|v| serde_json::to_string_pretty(&v))
-            .unwrap_or_else(|_| raw.clone());
-        parts.push(pretty);
-        parts.push("---".to_string());
-    }
-    parts.push(report.analysis.clone());
-    parts.join("\n")
-}

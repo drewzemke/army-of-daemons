@@ -31,6 +31,14 @@ enum Commands {
         /// Daemon or instance name (e.g. "pod-errors" or "pod-errors::my-server")
         name: String,
     },
+    /// Fetch a single report by id
+    Report {
+        /// Report id
+        id: i64,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Export reports as JSON
     Export {
         /// Filter by daemon name
@@ -68,6 +76,24 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Check { name } => daemon::runner::check_one(&config_dir, &name).await,
+        Commands::Report { id, json } => {
+            let global = config::load_global(&config_dir)?;
+            let database = db::Database::open(&global.db_path)?;
+            match database.get_report(id)? {
+                Some(report) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&report)?);
+                    } else {
+                        println!("{}", report.format_text());
+                    }
+                }
+                None => {
+                    eprintln!("report {id} not found");
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
         Commands::Export { daemon, days } => {
             let global = config::load_global(&config_dir)?;
             let database = db::Database::open(&global.db_path)?;

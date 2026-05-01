@@ -50,7 +50,7 @@ impl DetailState {
 }
 
 pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
-    let header = Row::new(vec!["sev", "time", "title", "read"])
+    let header = Row::new(vec!["id", "sev", "time", "title", "read"])
         .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .bottom_margin(1);
 
@@ -75,6 +75,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
             let read_marker = if r.is_read { "●" } else { "○" };
 
             Row::new(vec![
+                Cell::from(r.id.to_string()),
                 Cell::from(sev_str),
                 Cell::from(time),
                 Cell::from(title.to_string()),
@@ -84,6 +85,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
         .collect();
 
     let widths = [
+        Constraint::Length(5),
         Constraint::Length(6),
         Constraint::Length(14),
         Constraint::Min(20),
