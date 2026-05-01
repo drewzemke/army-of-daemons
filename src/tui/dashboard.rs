@@ -65,16 +65,24 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
                 format!("{emoji} {label}")
             };
 
-            let age = s.last_checked.map(|ts| {
-                let ago = chrono::Utc::now().timestamp() - ts;
-                format_age(ago)
-            }).unwrap_or_else(|| "never".into());
+            let last_check_cell = if s.running_since.is_some() {
+                Cell::from(Span::styled(
+                    "running",
+                    Style::default().fg(Color::Yellow),
+                ))
+            } else {
+                let age = s.last_checked.map(|ts| {
+                    let ago = chrono::Utc::now().timestamp() - ts;
+                    format_age(ago)
+                }).unwrap_or_else(|| "never".into());
+                Cell::from(age)
+            };
 
             Row::new(vec![
                 Cell::from(truncate(&s.instance_id, 30)),
                 Cell::from(status),
                 Cell::from(s.unread_count.to_string()),
-                Cell::from(age),
+                last_check_cell,
             ])
         })
         .collect();

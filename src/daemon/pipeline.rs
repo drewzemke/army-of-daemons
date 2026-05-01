@@ -24,6 +24,9 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     };
     db.upsert_instance(instance_id, &instance.daemon_name, params_json.as_deref())?;
 
+    let _ = db.set_running(instance_id);
+    let _guard = RunningGuard { db: db.clone(), instance_id: instance_id.clone() };
+
     // figure out "since"
     let since = match db.get_last_checked(instance_id)? {
         Some(ts) => chrono::DateTime::from_timestamp(ts, 0)
@@ -316,4 +319,15 @@ fn merge_item_into_context(instance: &DaemonInstance, item: &Value, run_count: u
     }
 
     minijinja::Value::from_serialize(&map)
+}
+
+struct RunningGuard {
+    db: Database,
+    instance_id: String,
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        let _ = self.db.clear_running(&self.instance_id);
+    }
 }

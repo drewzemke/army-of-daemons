@@ -30,6 +30,13 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let daemons = config::load_daemons(&config_dir)?;
     let instances = expand_all(&daemons);
 
+    // clear any stale running_since from a previous crash
+    match db.clear_stale_running(0) {
+        Ok(n) if n > 0 => tracing::info!(cleared = n, "cleared stale running flags"),
+        Err(e) => tracing::warn!(err=%e, "failed to clear stale running flags"),
+        _ => {}
+    }
+
     tracing::info!(
         instance_count = instances.len(),
         "runner starting"

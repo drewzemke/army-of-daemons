@@ -59,6 +59,7 @@ pub struct DaemonSummary {
     pub unread_count: i64,
     pub max_severity: i32,
     pub last_checked: Option<i64>,
+    pub running_since: Option<i64>,
 }
 
 impl Database {
@@ -119,6 +120,10 @@ impl Database {
         let _ = conn.execute_batch(
             "ALTER TABLE reports ADD COLUMN session_id TEXT;"
         );
+        // migration: add running_since column to track active pipelines
+        let _ = conn.execute_batch(
+            "ALTER TABLE instances ADD COLUMN running_since INTEGER;"
+        );
         Ok(db)
     }
 
@@ -166,6 +171,32 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok((now, run_count))
+    }
+
+    pub fn set_running(&self, instance_id: &str) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn()?.execute(
+            "UPDATE instances SET running_since=?1 WHERE id=?2",
+            params![now, instance_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_running(&self, instance_id: &str) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE instances SET running_since=NULL WHERE id=?1",
+            params![instance_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_stale_running(&self, max_age_secs: i64) -> Result<usize> {
+        let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
+        let cleared = self.conn()?.execute(
+            "UPDATE instances SET running_since=NULL WHERE running_since IS NOT NULL AND running_since < ?1",
+            params![cutoff],
+        )?;
+        Ok(cleared)
     }
 
     pub fn get_last_checked(&self, instance_id: &str) -> Result<Option<i64>> {
@@ -334,22 +365,26 @@ impl Database {
     pub fn daemon_summaries(&self, display_after_days: u32) -> Result<Vec<DaemonSummary>> {
         let conn = self.conn()?;
         let cutoff = display_cutoff(display_after_days);
+        let stale_cutoff = chrono::Utc::now().timestamp() - 600;
         let mut stmt = conn.prepare(
             "SELECT i.id, i.daemon_name, i.last_checked,
                     COALESCE(SUM(CASE WHEN r.is_read=0 THEN 1 ELSE 0 END), 0) as unread,
-                    COALESCE(MAX(CASE WHEN r.is_read=0 THEN r.severity ELSE 0 END), 0) as max_sev
+                    COALESCE(MAX(CASE WHEN r.is_read=0 THEN r.severity ELSE 0 END), 0) as max_sev,
+                    CASE WHEN i.running_since > ?2 THEN i.running_since ELSE NULL END as running,
+                    MAX(r.created_at) as latest_report
              FROM instances i
              LEFT JOIN reports r ON r.instance_id = i.id AND r.created_at > ?1
              GROUP BY i.id
-             ORDER BY max_sev DESC, unread DESC, i.id",
+             ORDER BY max_sev DESC, unread DESC, latest_report DESC",
         )?;
-        let rows = stmt.query_map(params![cutoff], |row| {
+        let rows = stmt.query_map(params![cutoff, stale_cutoff], |row| {
             Ok(DaemonSummary {
                 instance_id: row.get(0)?,
                 daemon_name: row.get(1)?,
                 last_checked: row.get(2)?,
                 unread_count: row.get(3)?,
                 max_severity: row.get(4)?,
+                running_since: row.get(5)?,
             })
         })?;
         let mut summaries = Vec::new();
