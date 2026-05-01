@@ -166,7 +166,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let help_text = match &app.view {
         View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
         View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  y:copy  Esc:back",
-        View::Report { .. } => " j/k:scroll  s:source  y:copy  r:read  u:unread  Esc:back",
+        View::Report { .. } => " j/k:scroll  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
     };
     let bar = Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)));
     f.render_widget(bar, status_bar);
@@ -184,6 +184,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "R           mark all read (this daemon)",
         "s           toggle source data",
         "y           copy report content",
+        "i           copy session id",
         "x           manually run daemon",
         "/           search / filter",
         "?           toggle this help",
@@ -336,6 +337,13 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
         KeyCode::Char('y') => {
             if let Some(ref report) = app.report.report {
                 copy_to_clipboard(&report.format_text());
+            }
+        }
+        KeyCode::Char('i') => {
+            if let Some(ref report) = app.report.report
+                && let Some(ref sid) = report.session_id
+            {
+                copy_to_clipboard(sid);
             }
         }
         KeyCode::Char('s') => app.report.toggle_source(),
