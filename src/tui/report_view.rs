@@ -101,6 +101,14 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
         lines.push(styled);
     }
 
+    // session footer
+    if let Some(ref sid) = report.session_id {
+        let dim = Style::default().fg(Color::DarkGray);
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("---", dim)));
+        lines.push(Line::from(Span::styled(format!("session: {sid}"), dim)));
+    }
+
     let block_title = format!(" #{} {} — {} ", report.id, report.instance_id, title_text);
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(block_title).padding(Padding::horizontal(1)))

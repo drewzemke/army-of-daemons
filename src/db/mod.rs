@@ -20,6 +20,7 @@ pub struct Report {
     pub dedup_key: Option<String>,
     pub analysis: String,
     pub source_items_json: Option<String>,
+    pub session_id: Option<String>,
     pub is_read: bool,
     pub is_error: bool,
 }
@@ -35,6 +36,9 @@ impl Report {
             parts.push("---".to_string());
         }
         parts.push(self.analysis.clone());
+        if let Some(ref sid) = self.session_id {
+            parts.push(format!("\n---\nsession: {sid}"));
+        }
         parts.join("\n")
     }
 }
@@ -111,6 +115,10 @@ impl Database {
         let _ = conn.execute_batch(
             "ALTER TABLE instances ADD COLUMN in_error INTEGER DEFAULT 0;"
         );
+        // migration: add session_id column to existing reports tables
+        let _ = conn.execute_batch(
+            "ALTER TABLE reports ADD COLUMN session_id TEXT;"
+        );
         Ok(db)
     }
 
@@ -185,14 +193,15 @@ impl Database {
         dedup_key: Option<&str>,
         analysis: &str,
         source_items_json: Option<&str>,
+        session_id: Option<&str>,
         is_error: bool,
     ) -> Result<i64> {
         let conn = self.conn()?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO reports (instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, is_error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![instance_id, now, severity, title, dedup_key, analysis, source_items_json, is_error as i32],
+            "INSERT INTO reports (instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, is_error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![instance_id, now, severity, title, dedup_key, analysis, source_items_json, session_id, is_error as i32],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -270,7 +279,7 @@ impl Database {
     pub fn get_report(&self, report_id: i64) -> Result<Option<Report>> {
         let conn = self.conn()?;
         let result = conn.query_row(
-            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, is_read, is_error
+            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, is_read, is_error
              FROM reports WHERE id=?1",
             params![report_id],
             map_report,
@@ -286,7 +295,7 @@ impl Database {
         let conn = self.conn()?;
         let cutoff = display_cutoff(display_after_days);
         let mut stmt = conn.prepare(
-            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, is_read, is_error
+            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, is_read, is_error
              FROM reports WHERE instance_id=?1 AND created_at > ?2
              ORDER BY created_at DESC LIMIT ?3",
         )?;
@@ -436,7 +445,7 @@ impl Database {
         if let Some(daemon_name) = daemon {
             let mut stmt = conn.prepare(
                 "SELECT r.id, r.instance_id, r.created_at, r.severity, r.title, r.dedup_key,
-                        r.analysis, r.source_items_json, r.is_read, r.is_error
+                        r.analysis, r.source_items_json, r.session_id, r.is_read, r.is_error
                  FROM reports r
                  JOIN instances i ON r.instance_id = i.id
                  WHERE i.daemon_name = ?1 AND r.created_at > ?2
@@ -449,7 +458,7 @@ impl Database {
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, instance_id, created_at, severity, title, dedup_key,
-                        analysis, source_items_json, is_read, is_error
+                        analysis, source_items_json, session_id, is_read, is_error
                  FROM reports WHERE created_at > ?1
                  ORDER BY created_at DESC",
             )?;
@@ -473,8 +482,9 @@ fn map_report(row: &rusqlite::Row) -> rusqlite::Result<Report> {
         dedup_key: row.get(5)?,
         analysis: row.get(6)?,
         source_items_json: row.get(7)?,
-        is_read: row.get::<_, i32>(8)? != 0,
-        is_error: row.get::<_, i32>(9)? != 0,
+        session_id: row.get(8)?,
+        is_read: row.get::<_, i32>(9)? != 0,
+        is_error: row.get::<_, i32>(10)? != 0,
     })
 }
 

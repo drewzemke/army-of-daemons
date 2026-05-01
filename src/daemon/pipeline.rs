@@ -150,8 +150,8 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
 
     tracing::info!(%instance_id, prompt_bytes=rendered_prompt.len(), %model, "invoking claude");
 
-    let analysis = match invoke_claude(&rendered_prompt, model, allowed_tools, working_dir.as_deref()).await {
-        Ok(text) => text,
+    let response = match invoke_claude(&rendered_prompt, model, allowed_tools, working_dir.as_deref()).await {
+        Ok(resp) => resp,
         Err(e) => {
             tracing::error!(%instance_id, err=%e, "claude invocation failed");
             report_error(db, instance_id, &format!("claude analysis failed: {e}"))?;
@@ -160,11 +160,10 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     };
 
     // 4. REPORT — parse severity and title from response header
-    let (severity, title, clean_analysis) = parse_response_header(&analysis);
+    let (severity, title, clean_analysis) = parse_response_header(&response.result);
     let dedup_key = config.filter.as_ref()
         .and_then(|f| f.dedup_key.as_ref())
         .and_then(|tmpl| {
-            // use first item's fields for the dedup key
             let item_ctx = merge_item_into_context(instance, &filtered[0], run_count as u64, &since);
             config::render_template(tmpl, &item_ctx).ok()
         });
@@ -177,6 +176,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         dedup_key.as_deref(),
         &clean_analysis,
         source_json.as_deref(),
+        response.session_id.as_deref(),
         false,
     )?;
 
@@ -191,7 +191,7 @@ fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {
         return Ok(());
     }
     db.set_error(instance_id, true)?;
-    db.insert_report(instance_id, 5, Some("daemon error"), None, message, None, true)?;
+    db.insert_report(instance_id, 5, Some("daemon error"), None, message, None, None, true)?;
     Ok(())
 }
 
@@ -230,19 +230,25 @@ fn parse_response_header(response: &str) -> (i32, Option<String>, String) {
     (severity, title, clean)
 }
 
+pub struct ClaudeResponse {
+    pub result: String,
+    pub session_id: Option<String>,
+}
+
 /// invoke `claude -p` with the prompt piped via stdin
 async fn invoke_claude(
     prompt: &str,
     model: &str,
     allowed_tools: &str,
     working_dir: Option<&str>,
-) -> Result<String> {
+) -> Result<ClaudeResponse> {
     let mut cmd = Command::new("claude");
     // strip API key so claude always uses the team plan (interactive login),
     // never accidentally burns personal API credits
     cmd.env_remove("ANTHROPIC_API_KEY");
     cmd.arg("-p")
         .arg("--model").arg(model)
+        .arg("--output-format").arg("json")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -257,10 +263,8 @@ async fn invoke_claude(
 
     let mut child = cmd.spawn().context("failed to spawn claude")?;
 
-    // write prompt to stdin
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(prompt.as_bytes()).await?;
-        // drop stdin to signal EOF
     }
 
     let output = child.wait_with_output().await?;
@@ -270,7 +274,20 @@ async fn invoke_claude(
         anyhow::bail!("claude exited with {}: {stderr}", output.status);
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout)
+        .context("parsing claude JSON output")?;
+
+    let result = json.get("result")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let session_id = json.get("session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Ok(ClaudeResponse { result, session_id })
 }
 
 /// build a template context that has both the instance variables and the item's
