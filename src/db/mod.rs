@@ -39,6 +39,14 @@ impl Report {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportSummary {
+    pub id: i64,
+    pub severity: i32,
+    pub title: Option<String>,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct DaemonSummary {
     pub instance_id: String,
@@ -288,6 +296,28 @@ impl Database {
             reports.push(row?);
         }
         Ok(reports)
+    }
+
+    pub fn recent_report_summaries(&self, instance_id: &str, limit: usize) -> Result<Vec<ReportSummary>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, severity, title, created_at
+             FROM reports WHERE instance_id=?1 AND is_error=0
+             ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![instance_id, limit], |row| {
+            Ok(ReportSummary {
+                id: row.get(0)?,
+                severity: row.get(1)?,
+                title: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            summaries.push(row?);
+        }
+        Ok(summaries)
     }
 
     // -- dashboard queries --

@@ -137,8 +137,9 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     }
 
     // 3. ANALYZE
-    let analyze_ctx = config::template::build_context_with_since(
-        instance, &filtered, run_count as u64, &since,
+    let recent_reports = db.recent_report_summaries(instance_id, 10).unwrap_or_default();
+    let analyze_ctx = config::template::build_context_full(
+        instance, &filtered, run_count as u64, &since, &recent_reports,
     );
     let rendered_prompt = config::render_template(&config.analyze.prompt, &analyze_ctx)
         .context("rendering analyze prompt")?;
