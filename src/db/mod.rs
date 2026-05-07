@@ -21,6 +21,7 @@ pub struct Report {
     pub analysis: String,
     pub source_items_json: Option<String>,
     pub session_id: Option<String>,
+    pub working_dir: Option<String>,
     pub is_read: bool,
     pub is_error: bool,
 }
@@ -124,6 +125,10 @@ impl Database {
         let _ = conn.execute_batch(
             "ALTER TABLE instances ADD COLUMN running_since INTEGER;"
         );
+        // migration: add working_dir column to reports
+        let _ = conn.execute_batch(
+            "ALTER TABLE reports ADD COLUMN working_dir TEXT;"
+        );
         Ok(db)
     }
 
@@ -225,14 +230,15 @@ impl Database {
         analysis: &str,
         source_items_json: Option<&str>,
         session_id: Option<&str>,
+        working_dir: Option<&str>,
         is_error: bool,
     ) -> Result<i64> {
         let conn = self.conn()?;
         let now = chrono::Utc::now().timestamp();
         conn.execute(
-            "INSERT INTO reports (instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, is_error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![instance_id, now, severity, title, dedup_key, analysis, source_items_json, session_id, is_error as i32],
+            "INSERT INTO reports (instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![instance_id, now, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_error as i32],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -310,7 +316,7 @@ impl Database {
     pub fn get_report(&self, report_id: i64) -> Result<Option<Report>> {
         let conn = self.conn()?;
         let result = conn.query_row(
-            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, is_read, is_error
+            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error
              FROM reports WHERE id=?1",
             params![report_id],
             map_report,
@@ -326,7 +332,7 @@ impl Database {
         let conn = self.conn()?;
         let cutoff = display_cutoff(display_after_days);
         let mut stmt = conn.prepare(
-            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, is_read, is_error
+            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error
              FROM reports WHERE instance_id=?1 AND created_at > ?2
              ORDER BY created_at DESC LIMIT ?3",
         )?;
@@ -480,7 +486,7 @@ impl Database {
         if let Some(daemon_name) = daemon {
             let mut stmt = conn.prepare(
                 "SELECT r.id, r.instance_id, r.created_at, r.severity, r.title, r.dedup_key,
-                        r.analysis, r.source_items_json, r.session_id, r.is_read, r.is_error
+                        r.analysis, r.source_items_json, r.session_id, r.working_dir, r.is_read, r.is_error
                  FROM reports r
                  JOIN instances i ON r.instance_id = i.id
                  WHERE i.daemon_name = ?1 AND r.created_at > ?2
@@ -493,7 +499,7 @@ impl Database {
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, instance_id, created_at, severity, title, dedup_key,
-                        analysis, source_items_json, session_id, is_read, is_error
+                        analysis, source_items_json, session_id, working_dir, is_read, is_error
                  FROM reports WHERE created_at > ?1
                  ORDER BY created_at DESC",
             )?;
@@ -518,8 +524,9 @@ fn map_report(row: &rusqlite::Row) -> rusqlite::Result<Report> {
         analysis: row.get(6)?,
         source_items_json: row.get(7)?,
         session_id: row.get(8)?,
-        is_read: row.get::<_, i32>(9)? != 0,
-        is_error: row.get::<_, i32>(10)? != 0,
+        working_dir: row.get(9)?,
+        is_read: row.get::<_, i32>(10)? != 0,
+        is_error: row.get::<_, i32>(11)? != 0,
     })
 }
 

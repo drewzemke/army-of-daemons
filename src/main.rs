@@ -48,6 +48,11 @@ enum Commands {
         #[arg(long, default_value = "30")]
         days: u32,
     },
+    /// Resume a claude session from a report
+    Resume {
+        /// Report ID
+        id: i64,
+    },
     /// Validate all daemon configs
     Validate,
 }
@@ -100,6 +105,24 @@ async fn main() -> Result<()> {
             let reports = database.export_reports(daemon.as_deref(), days)?;
             println!("{}", serde_json::to_string_pretty(&reports)?);
             Ok(())
+        }
+        Commands::Resume { id } => {
+            let global = config::load_global(&config_dir)?;
+            let database = db::Database::open(&global.db_path)?;
+            let report = database.get_report(id)?
+                .ok_or_else(|| anyhow::anyhow!("no report with id {id}"))?;
+            let session_id = report.session_id
+                .ok_or_else(|| anyhow::anyhow!("report {id} has no session id (error reports don't have sessions)"))?;
+
+            let mut cmd = std::process::Command::new("claude");
+            cmd.arg("--resume").arg(&session_id);
+            if let Some(ref dir) = report.working_dir {
+                cmd.current_dir(config::resolve_path(dir));
+            }
+
+            use std::os::unix::process::CommandExt;
+            let err = cmd.exec();
+            Err(err.into())
         }
         Commands::Validate => {
             config::validate_all(&config_dir)?;

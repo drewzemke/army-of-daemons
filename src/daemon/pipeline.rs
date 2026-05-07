@@ -180,6 +180,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         &clean_analysis,
         source_json.as_deref(),
         response.session_id.as_deref(),
+        working_dir.as_deref(),
         false,
     )?;
 
@@ -194,7 +195,7 @@ fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {
         return Ok(());
     }
     db.set_error(instance_id, true)?;
-    db.insert_report(instance_id, 5, Some("daemon error"), None, message, None, None, true)?;
+    db.insert_report(instance_id, 5, Some("daemon error"), None, message, None, None, None, true)?;
     Ok(())
 }
 
