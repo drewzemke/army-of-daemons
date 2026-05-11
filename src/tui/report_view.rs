@@ -34,8 +34,7 @@ impl ReportState {
 
 pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     let Some(ref report) = state.report else {
-        let p = Paragraph::new("report not found")
-            .block(Block::default().borders(Borders::ALL));
+        let p = Paragraph::new("report not found").block(Block::default().borders(Borders::ALL));
         f.render_widget(p, area);
         return;
     };
@@ -44,7 +43,11 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     let sev_label = db::severity_label(report.severity);
     let sev_emoji = db::severity_emoji(report.severity);
     let time = chrono::DateTime::from_timestamp(report.created_at, 0)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
         .unwrap_or_default();
 
     let title_text = report.title.as_deref().unwrap_or("report");
@@ -55,7 +58,9 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     lines.push(Line::from(vec![
         Span::styled(
             format!("{sev_emoji} {sev_label} ({}) ", report.severity),
-            Style::default().fg(severity_color(report.severity)).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(severity_color(report.severity))
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(time, Style::default().fg(Color::DarkGray)),
     ]));
@@ -64,7 +69,9 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     if report.is_error {
         lines.push(Line::from(Span::styled(
             "⚠ daemon error",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
     }
@@ -95,7 +102,9 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
 
     // analysis body
     let md_opts = tui_markdown::Options::new(TermStyleSheet);
-    lines.extend(tui_markdown::from_str_with_options(&report.analysis, &md_opts).lines);
+    let mut md_text = tui_markdown::from_str_with_options(&report.analysis, &md_opts);
+    color_inline_styles(&mut md_text);
+    lines.extend(md_text.lines);
 
     // session footer
     if let Some(ref sid) = report.session_id {
@@ -107,13 +116,17 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
 
     let block_title = format!(" #{} {} — {} ", report.id, report.instance_id, title_text);
     let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(block_title).padding(Padding::horizontal(1)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(block_title)
+                .padding(Padding::horizontal(1)),
+        )
         .wrap(Wrap { trim: false })
         .scroll((state.scroll, 0));
 
     f.render_widget(para, area);
 }
-
 
 #[derive(Clone)]
 struct TermStyleSheet;
@@ -121,24 +134,53 @@ struct TermStyleSheet;
 impl tui_markdown::StyleSheet for TermStyleSheet {
     fn heading(&self, level: u8) -> Style {
         match level {
-            1 => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            _ => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            1 => Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+            2 => Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+            3 => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            _ => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         }
     }
     fn code(&self) -> Style {
         Style::default().fg(Color::Green)
     }
     fn link(&self) -> Style {
-        Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)
+        Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::UNDERLINED)
     }
     fn blockquote(&self) -> Style {
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC)
     }
     fn heading_meta(&self) -> Style {
         Style::default().fg(Color::DarkGray)
     }
     fn metadata_block(&self) -> Style {
         Style::default().fg(Color::DarkGray)
+    }
+}
+
+fn color_inline_styles(text: &mut Text<'_>) {
+    for line in &mut text.lines {
+        for span in &mut line.spans {
+            if span.style.fg.is_some() {
+                continue;
+            }
+            if span.style.add_modifier.contains(Modifier::BOLD) {
+                span.style.fg = Some(Color::Cyan);
+            } else if span.style.add_modifier.contains(Modifier::ITALIC) {
+                span.style.fg = Some(Color::Yellow);
+            }
+        }
     }
 }
 
@@ -231,10 +273,9 @@ mod tests {
     #[test]
     fn highlight_json_produces_colored_spans() {
         let json = r#"{"name": "test", "count": 42, "active": true}"#;
-        let pretty = serde_json::to_string_pretty(
-            &serde_json::from_str::<serde_json::Value>(json).unwrap(),
-        )
-        .unwrap();
+        let pretty =
+            serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(json).unwrap())
+                .unwrap();
 
         let text = highlight_json(&pretty);
 
@@ -262,12 +303,10 @@ mod tests {
         assert!(!text.lines.is_empty(), "should produce lines from markdown");
 
         // the title line should have some styling (bold, color, etc.)
-        let has_styled = text.lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| s.style != Style::default())
-        });
+        let has_styled = text
+            .lines
+            .iter()
+            .any(|line| line.spans.iter().any(|s| s.style != Style::default()));
         assert!(has_styled, "markdown should produce styled spans");
     }
 }
-
