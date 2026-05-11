@@ -1,9 +1,5 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::SyntaxSet;
-use syntect::util::LinesWithEndings;
 
 use crate::db::{self, Database, Report};
 
@@ -98,7 +94,8 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     }
 
     // analysis body
-    lines.extend(tui_markdown::from_str(&report.analysis).lines);
+    let md_opts = tui_markdown::Options::new(TermStyleSheet);
+    lines.extend(tui_markdown::from_str_with_options(&report.analysis, &md_opts).lines);
 
     // session footer
     if let Some(ref sid) = report.session_id {
@@ -118,54 +115,103 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
 }
 
 
+#[derive(Clone)]
+struct TermStyleSheet;
+
+impl tui_markdown::StyleSheet for TermStyleSheet {
+    fn heading(&self, level: u8) -> Style {
+        match level {
+            1 => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            _ => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        }
+    }
+    fn code(&self) -> Style {
+        Style::default().fg(Color::Green)
+    }
+    fn link(&self) -> Style {
+        Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)
+    }
+    fn blockquote(&self) -> Style {
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+    }
+    fn heading_meta(&self) -> Style {
+        Style::default().fg(Color::DarkGray)
+    }
+    fn metadata_block(&self) -> Style {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
 fn highlight_json(json: &str) -> Text<'static> {
-    let ps = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
-    let Some(syntax) = ps.find_syntax_by_extension("json") else {
-        return plain_text(json);
-    };
-    let Some(theme) = ts.themes.get("base16-ocean.dark") else {
-        return plain_text(json);
-    };
-    let mut h = HighlightLines::new(syntax, theme);
     let mut lines = Vec::new();
-    for line in LinesWithEndings::from(json) {
-        let Ok(segments) = h.highlight_line(line, &ps) else {
-            lines.push(Line::from(line.trim_end_matches('\n').to_string()));
-            continue;
-        };
-        let spans: Vec<Span<'static>> = segments
-            .into_iter()
-            .map(|(style, text)| {
-                let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
-                let mut modifier = Modifier::empty();
-                if style.font_style.contains(FontStyle::BOLD) {
-                    modifier |= Modifier::BOLD;
+    let mut in_string = false;
+    for raw_line in json.lines() {
+        let mut spans = Vec::new();
+        let mut chars = raw_line.chars().peekable();
+        let mut buf = String::new();
+
+        while let Some(&ch) = chars.peek() {
+            if in_string {
+                buf.push(chars.next().unwrap());
+                if ch == '\\' {
+                    if let Some(&esc) = chars.peek() {
+                        buf.push(chars.next().unwrap());
+                        let _ = esc;
+                    }
+                } else if ch == '"' {
+                    // check if this string was a key (next non-ws char is ':')
+                    let rest: String = chars.clone().collect();
+                    let is_key = rest.trim_start().starts_with(':');
+                    let color = if is_key { Color::Blue } else { Color::Green };
+                    spans.push(Span::styled(buf.clone(), Style::default().fg(color)));
+                    buf.clear();
+                    in_string = false;
                 }
-                if style.font_style.contains(FontStyle::ITALIC) {
-                    modifier |= Modifier::ITALIC;
+            } else {
+                match ch {
+                    '"' => {
+                        if !buf.is_empty() {
+                            spans.push(classify_token(&buf));
+                            buf.clear();
+                        }
+                        buf.push(chars.next().unwrap());
+                        in_string = true;
+                    }
+                    '{' | '}' | '[' | ']' | ':' | ',' => {
+                        if !buf.is_empty() {
+                            spans.push(classify_token(&buf));
+                            buf.clear();
+                        }
+                        spans.push(Span::styled(
+                            ch.to_string(),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                        chars.next();
+                    }
+                    _ => {
+                        buf.push(chars.next().unwrap());
+                    }
                 }
-                if style.font_style.contains(FontStyle::UNDERLINE) {
-                    modifier |= Modifier::UNDERLINED;
-                }
-                Span::styled(
-                    text.trim_end_matches('\n').to_string(),
-                    Style::default().fg(fg).add_modifier(modifier),
-                )
-            })
-            .collect();
+            }
+        }
+        if !buf.is_empty() {
+            spans.push(classify_token(&buf));
+        }
         lines.push(Line::from(spans));
     }
     Text::from(lines)
 }
 
-fn plain_text(s: &str) -> Text<'static> {
-    let dim = Style::default().fg(Color::DarkGray);
-    Text::from(
-        s.lines()
-            .map(|l| Line::from(Span::styled(l.to_string(), dim)))
-            .collect::<Vec<_>>(),
-    )
+fn classify_token(token: &str) -> Span<'static> {
+    let trimmed = token.trim();
+    let style = if trimmed == "true" || trimmed == "false" || trimmed == "null" {
+        Style::default().fg(Color::Cyan)
+    } else if trimmed.parse::<f64>().is_ok() {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    Span::styled(token.to_string(), style)
 }
 
 fn severity_color(sev: i32) -> Color {

@@ -27,5 +27,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 anyhow = "1"
 regex = "1"
-tui-markdown = "0.3"
-syntect = "5"
+tui-markdown = { version = "0.3", default-features = false }
