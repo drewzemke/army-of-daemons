@@ -1,5 +1,9 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{FontStyle, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 
 use crate::db::{self, Database, Report};
 
@@ -81,9 +85,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
                 let pretty = serde_json::from_str::<serde_json::Value>(raw)
                     .and_then(|v| serde_json::to_string_pretty(&v))
                     .unwrap_or_else(|_| raw.clone());
-                for line in pretty.lines() {
-                    lines.push(Line::from(Span::styled(line.to_string(), dim)));
-                }
+                lines.extend(highlight_json(&pretty).lines);
             }
         } else {
             lines.push(Line::from(Span::styled(
@@ -96,10 +98,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     }
 
     // analysis body
-    for line in report.analysis.lines() {
-        let styled = style_markdown_line(line);
-        lines.push(styled);
-    }
+    lines.extend(tui_markdown::from_str(&report.analysis).lines);
 
     // session footer
     if let Some(ref sid) = report.session_id {
@@ -118,31 +117,55 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     f.render_widget(para, area);
 }
 
-/// minimal markdown styling — headers get bold, code blocks get dim
-fn style_markdown_line(line: &str) -> Line<'static> {
-    if line.starts_with("## ") || line.starts_with("### ") {
-        Line::from(Span::styled(
-            line.to_string(),
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
-        ))
-    } else if line.starts_with("# ") {
-        Line::from(Span::styled(
-            line.to_string(),
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
-        ))
-    } else if line.starts_with("```") {
-        Line::from(Span::styled(
-            line.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ))
-    } else if line.starts_with("- ") || line.starts_with("* ") {
-        Line::from(Span::styled(
-            line.to_string(),
-            Style::default().fg(Color::White),
-        ))
-    } else {
-        Line::from(line.to_string())
+
+fn highlight_json(json: &str) -> Text<'static> {
+    let ps = SyntaxSet::load_defaults_newlines();
+    let ts = ThemeSet::load_defaults();
+    let Some(syntax) = ps.find_syntax_by_extension("json") else {
+        return plain_text(json);
+    };
+    let Some(theme) = ts.themes.get("base16-ocean.dark") else {
+        return plain_text(json);
+    };
+    let mut h = HighlightLines::new(syntax, theme);
+    let mut lines = Vec::new();
+    for line in LinesWithEndings::from(json) {
+        let Ok(segments) = h.highlight_line(line, &ps) else {
+            lines.push(Line::from(line.trim_end_matches('\n').to_string()));
+            continue;
+        };
+        let spans: Vec<Span<'static>> = segments
+            .into_iter()
+            .map(|(style, text)| {
+                let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+                let mut modifier = Modifier::empty();
+                if style.font_style.contains(FontStyle::BOLD) {
+                    modifier |= Modifier::BOLD;
+                }
+                if style.font_style.contains(FontStyle::ITALIC) {
+                    modifier |= Modifier::ITALIC;
+                }
+                if style.font_style.contains(FontStyle::UNDERLINE) {
+                    modifier |= Modifier::UNDERLINED;
+                }
+                Span::styled(
+                    text.trim_end_matches('\n').to_string(),
+                    Style::default().fg(fg).add_modifier(modifier),
+                )
+            })
+            .collect();
+        lines.push(Line::from(spans));
     }
+    Text::from(lines)
+}
+
+fn plain_text(s: &str) -> Text<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    Text::from(
+        s.lines()
+            .map(|l| Line::from(Span::styled(l.to_string(), dim)))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn severity_color(sev: i32) -> Color {
@@ -152,6 +175,53 @@ fn severity_color(sev: i32) -> Color {
         3 => Color::Yellow,
         2 => Color::Blue,
         _ => Color::DarkGray,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlight_json_produces_colored_spans() {
+        let json = r#"{"name": "test", "count": 42, "active": true}"#;
+        let pretty = serde_json::to_string_pretty(
+            &serde_json::from_str::<serde_json::Value>(json).unwrap(),
+        )
+        .unwrap();
+
+        let text = highlight_json(&pretty);
+
+        assert!(!text.lines.is_empty(), "should produce lines");
+
+        // at least one line should have multiple spans (proving tokenization,
+        // not just one-span-per-line like the old DarkGray fallback)
+        let multi_span = text.lines.iter().any(|line| line.spans.len() > 1);
+        assert!(multi_span, "highlighted JSON should have multi-span lines");
+    }
+
+    #[test]
+    fn highlight_json_handles_invalid_input() {
+        let bad = "this is { not valid json @@";
+        let text = highlight_json(bad);
+        // should not panic, should return some text
+        assert!(!text.lines.is_empty());
+    }
+
+    #[test]
+    fn markdown_rendering_produces_styled_output() {
+        let md = "# Title\n\nSome text with **bold**.\n\n## Subtitle\n\n- item 1\n- item 2\n\n```json\n{\"a\": 1}\n```\n";
+        let text = tui_markdown::from_str(md);
+
+        assert!(!text.lines.is_empty(), "should produce lines from markdown");
+
+        // the title line should have some styling (bold, color, etc.)
+        let has_styled = text.lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| s.style != Style::default())
+        });
+        assert!(has_styled, "markdown should produce styled spans");
     }
 }
 
