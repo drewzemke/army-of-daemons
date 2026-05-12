@@ -36,6 +36,7 @@ army
 | `army status` | One-line summary for embedding in a status bar |
 | `army validate` | Validate all daemon configs and templates |
 | `army dry-run <name>` | Run source + filter, print items as JSON (no LLM call) |
+| `army replay <id>` | Re-analyze a report's source data with the current prompt |
 | `army resume <id>` | Resume the claude session from a report |
 | `army export` | Export reports as JSON |
 

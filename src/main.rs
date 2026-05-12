@@ -56,6 +56,14 @@ enum Commands {
         #[arg(long)]
         show_prompt: bool,
     },
+    /// Re-analyze a report's source data with the current prompt
+    Replay {
+        /// Report ID to replay
+        id: i64,
+        /// Override the model for this replay
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Resume a claude session from a report
     Resume {
         /// Report ID
@@ -139,6 +147,31 @@ async fn main() -> Result<()> {
                     eprintln!("{}", output.rendered_prompt);
                 }
             }
+            Ok(())
+        }
+        Commands::Replay { id, model } => {
+            let global = config::load_global(&config_dir)?;
+            let database = db::Database::open(&global.db_path)?;
+            let report = database.get_report(id)?
+                .ok_or_else(|| anyhow::anyhow!("no report with id {id}"))?;
+
+            let daemons = config::load_daemons(&config_dir)?;
+            let instances = daemon::runner::expand_all(&daemons);
+            let instance = instances.into_iter()
+                .find(|i| i.instance_id == report.instance_id)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "daemon config for '{}' not found — was it deleted?",
+                    report.instance_id
+                ))?;
+
+            let new_id = daemon::pipeline::replay_report(
+                &report, &instance, &global, &database, model.as_deref(),
+            ).await?;
+
+            eprintln!("created report {new_id}");
+            let new_report = database.get_report(new_id)?
+                .ok_or_else(|| anyhow::anyhow!("failed to read new report"))?;
+            println!("{}", new_report.format_text());
             Ok(())
         }
         Commands::Resume { id } => {

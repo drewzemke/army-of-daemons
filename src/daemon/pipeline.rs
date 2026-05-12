@@ -245,6 +245,72 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     Ok(())
 }
 
+/// re-analyze a report's stored source items with the current prompt
+pub async fn replay_report(
+    report: &crate::db::Report,
+    instance: &DaemonInstance,
+    global: &GlobalConfig,
+    db: &Database,
+    model_override: Option<&str>,
+) -> Result<i64> {
+    let items: Vec<Value> = report.source_items_json.as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .context("parsing stored source items")?
+        .unwrap_or_default();
+
+    if items.is_empty() {
+        anyhow::bail!("report {} has no stored source items", report.id);
+    }
+
+    let since = chrono::DateTime::from_timestamp(report.created_at, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+
+    let recent_reports = db.recent_report_summaries(&report.instance_id, 10).unwrap_or_default();
+    let analyze_ctx = config::template::build_context_full(
+        instance, &items, 0, &since, &recent_reports,
+    );
+    let rendered_prompt = config::render_template(&instance.config.analyze.prompt, &analyze_ctx)
+        .context("rendering analyze prompt")?;
+
+    let model = model_override
+        .or(instance.config.analyze.model.as_deref())
+        .unwrap_or(&global.default_model);
+    let allowed_tools = instance.config.analyze.allowed_tools.as_deref()
+        .unwrap_or(&global.default_allowed_tools);
+
+    let working_dir = instance.config.working_directory.as_deref()
+        .map(|wd| {
+            let ctx = config::template::build_context_with_since(instance, &[], 0, &since);
+            config::render_template(wd, &ctx)
+        })
+        .transpose()
+        .context("rendering working_directory template")?;
+
+    eprintln!("replaying report {} with model {model}...", report.id);
+
+    let response = invoke_claude(&rendered_prompt, model, allowed_tools, working_dir.as_deref()).await
+        .context("claude invocation failed")?;
+
+    let (severity, title, clean_analysis) = parse_response_header(&response.result);
+    let source_json = serde_json::to_string(&items).ok();
+
+    let report_id = db.insert_report(
+        &report.instance_id,
+        severity,
+        title.as_deref(),
+        None,
+        &clean_analysis,
+        source_json.as_deref(),
+        response.session_id.as_deref(),
+        working_dir.as_deref(),
+        false,
+    )?;
+
+    Ok(report_id)
+}
+
 fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {
     if db.is_in_error(instance_id)? {
         return Ok(());
