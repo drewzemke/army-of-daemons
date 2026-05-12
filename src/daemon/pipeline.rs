@@ -11,6 +11,61 @@ use crate::db::Database;
 static SEVERITY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)severity:\s*([1-5])").unwrap());
 
+pub struct DryRunOutput {
+    pub instance_id: String,
+    #[allow(dead_code)]
+    pub command: String,
+    pub raw_count: usize,
+    pub filtered_items: Vec<Value>,
+    pub rendered_prompt: String,
+}
+
+/// run source + filter only, skip analyze and report
+pub async fn dry_run_instance(instance: &DaemonInstance) -> Result<DryRunOutput> {
+    let config = &instance.config;
+    let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+
+    let source_ctx = config::template::build_context_with_since(instance, &[], 0, &since);
+
+    let rendered_cmd = config::render_template(&config.source.command, &source_ctx)
+        .context("rendering source command template")?;
+
+    let working_dir = config.working_directory.as_deref()
+        .map(|wd| config::render_template(wd, &source_ctx))
+        .transpose()
+        .context("rendering working_directory template")?;
+
+    let items = crate::daemon::source::execute(
+        &rendered_cmd,
+        &config.source.format,
+        &config.source.success_codes,
+        config.source.max_items,
+        working_dir.as_deref(),
+    ).await?;
+
+    let raw_count = items.len();
+
+    let filtered = if let Some(ref filter_config) = config.filter {
+        crate::daemon::filter::apply_rules(items, &filter_config.rules)
+    } else {
+        items
+    };
+
+    let analyze_ctx = config::template::build_context_with_since(
+        instance, &filtered, 0, &since,
+    );
+    let rendered_prompt = config::render_template(&config.analyze.prompt, &analyze_ctx)
+        .context("rendering analyze prompt")?;
+
+    Ok(DryRunOutput {
+        instance_id: instance.instance_id.clone(),
+        command: rendered_cmd,
+        raw_count,
+        filtered_items: filtered,
+        rendered_prompt,
+    })
+}
+
 /// run the full pipeline for one daemon instance
 pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: &Database) -> Result<()> {
     let instance_id = &instance.instance_id;

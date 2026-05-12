@@ -6,9 +6,11 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use std::path::Path;
 
 use crate::config;
+use crate::daemon;
 use crate::db::Database;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +18,7 @@ enum View {
     Dashboard,
     Detail { instance_id: String },
     Report { report_id: i64 },
+    DryRun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,6 +58,12 @@ impl TimeRange {
     }
 }
 
+struct DryRunState {
+    instance_id: String,
+    content: String,
+    scroll: u16,
+}
+
 pub struct App {
     db: Database,
     config_dir: std::path::PathBuf,
@@ -63,6 +72,8 @@ pub struct App {
     dashboard: dashboard::DashboardState,
     detail: detail::DetailState,
     report: report_view::ReportState,
+    dry_run: Option<DryRunState>,
+    dry_run_rx: Option<tokio::sync::oneshot::Receiver<Result<daemon::pipeline::DryRunOutput>>>,
     runner_healthy: bool,
     show_help: bool,
     should_quit: bool,
@@ -81,6 +92,8 @@ impl App {
             dashboard: dashboard::DashboardState::default(),
             detail: detail::DetailState::default(),
             report: report_view::ReportState::default(),
+            dry_run: None,
+            dry_run_rx: None,
             runner_healthy: true,
             show_help: false,
             should_quit: false,
@@ -106,6 +119,7 @@ impl App {
             View::Dashboard => self.dashboard.refresh(&self.db, cutoff, q),
             View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id, cutoff, q),
             View::Report { report_id } => self.report.refresh(&self.db, *report_id),
+            View::DryRun => {}
         }
     }
 }
@@ -152,6 +166,37 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, ap
 
         if app.should_quit {
             return Ok(());
+        }
+
+        // check for dry-run completion
+        if let Some(ref mut rx) = app.dry_run_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            app.dry_run_rx = None;
+            match result {
+                Ok(output) => {
+                    let header = format!(
+                        "{}: {} raw items, {} after filter\n\n",
+                        output.instance_id, output.raw_count, output.filtered_items.len()
+                    );
+                    let json = serde_json::to_string_pretty(&output.filtered_items)
+                        .unwrap_or_else(|_| "[]".into());
+                    app.dry_run = Some(DryRunState {
+                        instance_id: output.instance_id,
+                        content: format!("{header}{json}"),
+                        scroll: 0,
+                    });
+                    app.view = View::DryRun;
+                }
+                Err(e) => {
+                    app.dry_run = Some(DryRunState {
+                        instance_id: String::new(),
+                        content: format!("dry-run failed: {e}"),
+                        scroll: 0,
+                    });
+                    app.view = View::DryRun;
+                }
+            }
         }
 
         if let Some((session_id, working_dir)) = app.pending_resume.take() {
@@ -218,6 +263,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             View::Dashboard => dashboard::draw_with_range(f, main_area, &mut app.dashboard, app.time_range.label()),
             View::Detail { .. } => detail::draw(f, main_area, &mut app.detail),
             View::Report { .. } => report_view::draw(f, main_area, &app.report),
+            View::DryRun => draw_dry_run(f, main_area, &app.dry_run),
         }
     }
 
@@ -233,7 +279,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         let hint = match &app.view {
             View::Dashboard => " j/k:navigate  Enter:drill in  /:search  Esc:clear",
             View::Detail { .. } => " j/k:navigate  Enter:view  /:search  Esc:clear+back",
-            View::Report { .. } => "",
+            View::Report { .. } | View::DryRun => "",
         };
         Line::from(vec![
             Span::styled(format!(" filter: {} ", app.search_query), Style::default().fg(Color::Yellow)),
@@ -241,9 +287,10 @@ fn draw(f: &mut Frame, app: &mut App) {
         ])
     } else {
         let help_text = match &app.view {
-            View::Dashboard => " j/k:navigate  Enter:drill in  t:time range  x:run now  /:search  ?:help  q:quit",
+            View::Dashboard => " j/k:navigate  Enter:drill in  d:dry-run  t:time range  x:run now  /:search  ?:help  q:quit",
             View::Detail { .. } => " j/k:navigate  Enter:view  D:delete  t:time range  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
             View::Report { .. } => " j/k:scroll  D:delete  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
+            View::DryRun => " j/k:scroll  y:copy  Esc:back",
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
@@ -331,6 +378,7 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
         View::Dashboard => handle_dashboard_key(app, key),
         View::Detail { instance_id } => handle_detail_key(app, key, &instance_id.clone()),
         View::Report { report_id } => handle_report_key(app, key, *report_id),
+        View::DryRun => handle_dry_run_key(app, key),
     }
 }
 
@@ -348,6 +396,27 @@ fn handle_dashboard_key(app: &mut App, key: event::KeyEvent) {
                 app.search_query.clear();
                 app.view = View::Detail { instance_id: id };
                 app.refresh();
+            }
+        }
+        KeyCode::Char('d') => {
+            if app.dry_run_rx.is_some() {
+                return;
+            }
+            if let Some(id) = app.dashboard.selected_instance_id() {
+                let config_dir = app.config_dir.clone();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                app.dry_run_rx = Some(rx);
+                tokio::spawn(async move {
+                    let result = async {
+                        let daemons = config::load_daemons(&config_dir)?;
+                        let instances = daemon::runner::expand_all(&daemons);
+                        let instance = instances.into_iter()
+                            .find(|i| i.instance_id == id || i.daemon_name == id)
+                            .ok_or_else(|| anyhow::anyhow!("instance '{id}' not found in configs"))?;
+                        daemon::pipeline::dry_run_instance(&instance).await
+                    }.await;
+                    let _ = tx.send(result);
+                });
             }
         }
         KeyCode::Char('x') => {
@@ -471,6 +540,54 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
         KeyCode::Char('k') | KeyCode::Up => app.report.scroll_up(),
         _ => {}
     }
+}
+
+fn handle_dry_run_key(app: &mut App, key: event::KeyEvent) {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.dry_run = None;
+            app.view = View::Dashboard;
+        }
+        KeyCode::Char('y') => {
+            if let Some(ref state) = app.dry_run {
+                copy_to_clipboard(&state.content);
+            }
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(ref mut state) = app.dry_run {
+                state.scroll = state.scroll.saturating_add(3);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(ref mut state) = app.dry_run {
+                state.scroll = state.scroll.saturating_sub(3);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn draw_dry_run(f: &mut Frame, area: Rect, state: &Option<DryRunState>) {
+    let Some(state) = state else {
+        let p = Paragraph::new("running dry-run...")
+            .block(Block::default().borders(Borders::ALL).title(" dry-run "));
+        f.render_widget(p, area);
+        return;
+    };
+
+    let title = if state.instance_id.is_empty() {
+        " dry-run ".to_string()
+    } else {
+        format!(" dry-run: {} ", state.instance_id)
+    };
+
+    let lines: Vec<Line> = state.content.lines().map(|l| Line::from(l.to_string())).collect();
+    let para = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(title).padding(Padding::horizontal(1)))
+        .wrap(Wrap { trim: false })
+        .scroll((state.scroll, 0));
+
+    f.render_widget(para, area);
 }
 
 fn copy_to_clipboard(text: &str) {

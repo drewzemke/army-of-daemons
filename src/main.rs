@@ -48,6 +48,14 @@ enum Commands {
         #[arg(long, default_value = "30")]
         days: u32,
     },
+    /// Dry-run a daemon: run source + filter, print items as JSON
+    DryRun {
+        /// Daemon or instance name
+        name: String,
+        /// Also print the rendered prompt
+        #[arg(long)]
+        show_prompt: bool,
+    },
     /// Resume a claude session from a report
     Resume {
         /// Report ID
@@ -104,6 +112,33 @@ async fn main() -> Result<()> {
             let database = db::Database::open(&global.db_path)?;
             let reports = database.export_reports(daemon.as_deref(), days)?;
             println!("{}", serde_json::to_string_pretty(&reports)?);
+            Ok(())
+        }
+        Commands::DryRun { name, show_prompt } => {
+            let daemons = config::load_daemons(&config_dir)?;
+            let instances = daemon::runner::expand_all(&daemons);
+            let matching: Vec<_> = instances
+                .iter()
+                .filter(|i| i.instance_id == name || i.daemon_name == name)
+                .collect();
+
+            if matching.is_empty() {
+                anyhow::bail!("no daemon or instance matching '{name}'");
+            }
+
+            for instance in matching {
+                eprintln!("dry-run {}...", instance.instance_id);
+                let output = daemon::pipeline::dry_run_instance(instance).await?;
+                eprintln!(
+                    "{}: {} raw items, {} after filter",
+                    output.instance_id, output.raw_count, output.filtered_items.len()
+                );
+                println!("{}", serde_json::to_string_pretty(&output.filtered_items)?);
+                if show_prompt {
+                    eprintln!("\n--- rendered prompt ---");
+                    eprintln!("{}", output.rendered_prompt);
+                }
+            }
             Ok(())
         }
         Commands::Resume { id } => {

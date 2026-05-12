@@ -143,7 +143,7 @@ pub async fn check_one(config_dir: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn expand_all(daemons: &[config::DaemonConfig]) -> Vec<DaemonInstance> {
+pub fn expand_all(daemons: &[config::DaemonConfig]) -> Vec<DaemonInstance> {
     let mut all = Vec::new();
     for d in daemons {
         all.extend(config::expand_instances(d));
