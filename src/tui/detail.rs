@@ -11,9 +11,9 @@ pub struct DetailState {
 }
 
 impl DetailState {
-    pub fn refresh(&mut self, db: &Database, instance_id: &str, display_after_days: u32, query: &str) {
+    pub fn refresh(&mut self, db: &Database, instance_id: &str, cutoff_secs: i64, query: &str) {
         self.instance_id = instance_id.to_string();
-        let mut reports = db.list_reports(instance_id, 100, display_after_days).unwrap_or_default();
+        let mut reports = db.list_reports(instance_id, 100, cutoff_secs).unwrap_or_default();
         if !query.is_empty() {
             let q = query.to_lowercase();
             reports.retain(|r| {

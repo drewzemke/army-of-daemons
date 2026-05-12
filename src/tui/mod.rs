@@ -18,10 +18,47 @@ enum View {
     Report { report_id: i64 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TimeRange {
+    OneHour,
+    SixHours,
+    TwentyFourHours,
+    OneWeek,
+}
+
+impl TimeRange {
+    fn secs(self) -> i64 {
+        match self {
+            Self::OneHour => 3600,
+            Self::SixHours => 6 * 3600,
+            Self::TwentyFourHours => 24 * 3600,
+            Self::OneWeek => 7 * 86400,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::OneHour => "1h",
+            Self::SixHours => "6h",
+            Self::TwentyFourHours => "24h",
+            Self::OneWeek => "1w",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::OneHour => Self::SixHours,
+            Self::SixHours => Self::TwentyFourHours,
+            Self::TwentyFourHours => Self::OneWeek,
+            Self::OneWeek => Self::OneHour,
+        }
+    }
+}
+
 pub struct App {
     db: Database,
     config_dir: std::path::PathBuf,
-    display_after_days: u32,
+    time_range: TimeRange,
     view: View,
     dashboard: dashboard::DashboardState,
     detail: detail::DetailState,
@@ -35,11 +72,11 @@ pub struct App {
 }
 
 impl App {
-    fn new(db: Database, config_dir: std::path::PathBuf, display_after_days: u32) -> Self {
+    fn new(db: Database, config_dir: std::path::PathBuf) -> Self {
         Self {
             db,
             config_dir,
-            display_after_days,
+            time_range: TimeRange::OneHour,
             view: View::Dashboard,
             dashboard: dashboard::DashboardState::default(),
             detail: detail::DetailState::default(),
@@ -63,10 +100,11 @@ impl App {
             _ => false,
         };
 
+        let cutoff = self.time_range.secs();
         let q = &self.search_query;
         match &self.view {
-            View::Dashboard => self.dashboard.refresh(&self.db, self.display_after_days, q),
-            View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id, self.display_after_days, q),
+            View::Dashboard => self.dashboard.refresh(&self.db, cutoff, q),
+            View::Detail { instance_id } => self.detail.refresh(&self.db, instance_id, cutoff, q),
             View::Report { report_id } => self.report.refresh(&self.db, *report_id),
         }
     }
@@ -82,7 +120,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(db, config_dir.to_path_buf(), global.display_after_days);
+    let mut app = App::new(db, config_dir.to_path_buf());
     app.refresh();
 
     let result = run_loop(&mut terminal, &mut app).await;
@@ -177,7 +215,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         draw_help(f, main_area);
     } else {
         match &app.view {
-            View::Dashboard => dashboard::draw(f, main_area, &mut app.dashboard),
+            View::Dashboard => dashboard::draw_with_range(f, main_area, &mut app.dashboard, app.time_range.label()),
             View::Detail { .. } => detail::draw(f, main_area, &mut app.detail),
             View::Report { .. } => report_view::draw(f, main_area, &app.report),
         }
@@ -203,8 +241,8 @@ fn draw(f: &mut Frame, app: &mut App) {
         ])
     } else {
         let help_text = match &app.view {
-            View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
-            View::Detail { .. } => " j/k:navigate  Enter:view  d:delete  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
+            View::Dashboard => " j/k:navigate  Enter:drill in  t:time range  x:run now  /:search  ?:help  q:quit",
+            View::Detail { .. } => " j/k:navigate  Enter:view  d:delete  t:time range  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
             View::Report { .. } => " j/k:scroll  d:delete  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
@@ -227,6 +265,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "y           copy report content",
         "R           resume claude session",
         "i           copy session id",
+        "t           cycle time range (1h/6h/24h/1w)",
         "x           manually run daemon",
         "/           search / filter",
         "?           toggle this help",
@@ -275,6 +314,11 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
 
     match key.code {
         KeyCode::Char('?') => app.show_help = true,
+        KeyCode::Char('t') if !matches!(app.view, View::Report { .. }) => {
+            app.time_range = app.time_range.next();
+            app.refresh();
+            return;
+        }
         KeyCode::Char('/') if !matches!(app.view, View::Report { .. }) => {
             app.search_mode = true;
             return;

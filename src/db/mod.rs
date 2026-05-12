@@ -334,9 +334,9 @@ impl Database {
         }
     }
 
-    pub fn list_reports(&self, instance_id: &str, limit: usize, display_after_days: u32) -> Result<Vec<Report>> {
+    pub fn list_reports(&self, instance_id: &str, limit: usize, cutoff_secs: i64) -> Result<Vec<Report>> {
         let conn = self.conn()?;
-        let cutoff = display_cutoff(display_after_days);
+        let cutoff = display_cutoff_secs(cutoff_secs);
         let mut stmt = conn.prepare(
             "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error
              FROM reports WHERE instance_id=?1 AND created_at > ?2
@@ -374,9 +374,9 @@ impl Database {
 
     // -- dashboard queries --
 
-    pub fn daemon_summaries(&self, display_after_days: u32) -> Result<Vec<DaemonSummary>> {
+    pub fn daemon_summaries(&self, cutoff_secs: i64) -> Result<Vec<DaemonSummary>> {
         let conn = self.conn()?;
-        let cutoff = display_cutoff(display_after_days);
+        let cutoff = display_cutoff_secs(cutoff_secs);
         let stale_cutoff = chrono::Utc::now().timestamp() - 600;
         let mut stmt = conn.prepare(
             "SELECT i.id, i.daemon_name, i.last_checked,
@@ -410,9 +410,9 @@ impl Database {
 
     // -- status line --
 
-    pub fn status_line(&self, display_after_days: u32) -> Result<String> {
+    pub fn status_line(&self, cutoff_secs: i64) -> Result<String> {
         let conn = self.conn()?;
-        let cutoff = display_cutoff(display_after_days);
+        let cutoff = display_cutoff_secs(cutoff_secs);
 
         // count errors separately
         let error_count: i64 = conn.query_row(
@@ -550,8 +550,8 @@ fn map_report(row: &rusqlite::Row) -> rusqlite::Result<Report> {
     })
 }
 
-fn display_cutoff(days: u32) -> i64 {
-    chrono::Utc::now().timestamp() - (days as i64 * 86400)
+pub fn display_cutoff_secs(secs: i64) -> i64 {
+    chrono::Utc::now().timestamp() - secs
 }
 
 pub fn severity_emoji(sev: i32) -> &'static str {

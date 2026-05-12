@@ -10,8 +10,8 @@ pub struct DashboardState {
 }
 
 impl DashboardState {
-    pub fn refresh(&mut self, db: &Database, display_after_days: u32, query: &str) {
-        let mut summaries = db.daemon_summaries(display_after_days).unwrap_or_default();
+    pub fn refresh(&mut self, db: &Database, cutoff_secs: i64, query: &str) {
+        let mut summaries = db.daemon_summaries(cutoff_secs).unwrap_or_default();
         if !query.is_empty() {
             let q = query.to_lowercase();
             summaries.retain(|s| s.instance_id.to_lowercase().contains(&q));
@@ -52,7 +52,7 @@ impl DashboardState {
     }
 }
 
-pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
+pub fn draw_with_range(f: &mut Frame, area: Rect, state: &mut DashboardState, range_label: &str) {
     let header = Row::new(vec!["daemon", "status", "unread", "last check"])
         .style(Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD))
         .bottom_margin(1);
@@ -105,7 +105,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DashboardState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" army-of-daemons ")
+                .title(format!(" army-of-daemons [{range_label}] "))
                 .padding(Padding::horizontal(1)),
         )
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));

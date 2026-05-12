@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
         Commands::Status => {
             let global = config::load_global(&config_dir)?;
             let db = db::Database::open(&global.db_path)?;
-            let line = db.status_line(global.display_after_days)?;
+            let line = db.status_line(global.display_after_days as i64 * 86400)?;
             println!("{line}");
             Ok(())
         }
