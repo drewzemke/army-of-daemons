@@ -66,11 +66,15 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut DetailState) {
         .reports
         .iter()
         .map(|r| {
-            let sev_str = format!(
-                "{} {}",
-                db::severity_emoji(r.severity),
-                r.severity
-            );
+            let sev_str = if r.is_error {
+                "\u{274c} err".to_string()
+            } else {
+                format!(
+                    "{} {}",
+                    db::severity_emoji(r.severity),
+                    r.severity
+                )
+            };
 
             let time = chrono::DateTime::from_timestamp(r.created_at, 0)
                 .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M %b %d").to_string())

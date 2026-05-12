@@ -55,26 +55,28 @@ pub fn draw(f: &mut Frame, area: Rect, state: &ReportState) {
     let mut lines: Vec<Line> = Vec::new();
 
     // severity + time header
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!("{sev_emoji} {sev_label} ({}) ", report.severity),
-            Style::default()
-                .fg(severity_color(report.severity))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(time, Style::default().fg(Color::DarkGray)),
-    ]));
-    lines.push(Line::from(""));
-
     if report.is_error {
-        lines.push(Line::from(Span::styled(
-            "⚠ daemon error",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "\u{274c} daemon error ",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(time, Style::default().fg(Color::DarkGray)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{sev_emoji} {sev_label} ({}) ", report.severity),
+                Style::default()
+                    .fg(severity_color(report.severity))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(time, Style::default().fg(Color::DarkGray)),
+        ]));
     }
+    lines.push(Line::from(""));
 
     // source data section
     if report.source_items_json.is_some() {

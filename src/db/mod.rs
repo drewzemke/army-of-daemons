@@ -61,6 +61,7 @@ pub struct DaemonSummary {
     pub max_severity: i32,
     pub last_checked: Option<i64>,
     pub running_since: Option<i64>,
+    pub in_error: bool,
 }
 
 impl Database {
@@ -379,14 +380,15 @@ impl Database {
         let stale_cutoff = chrono::Utc::now().timestamp() - 600;
         let mut stmt = conn.prepare(
             "SELECT i.id, i.daemon_name, i.last_checked,
-                    COALESCE(SUM(CASE WHEN r.is_read=0 THEN 1 ELSE 0 END), 0) as unread,
-                    COALESCE(MAX(CASE WHEN r.is_read=0 THEN r.severity ELSE 0 END), 0) as max_sev,
+                    COALESCE(SUM(CASE WHEN r.is_read=0 AND r.is_error=0 THEN 1 ELSE 0 END), 0) as unread,
+                    COALESCE(MAX(CASE WHEN r.is_read=0 AND r.is_error=0 THEN r.severity ELSE 0 END), 0) as max_sev,
                     CASE WHEN i.running_since > ?2 THEN i.running_since ELSE NULL END as running,
-                    MAX(r.created_at) as latest_report
+                    MAX(r.created_at) as latest_report,
+                    i.in_error
              FROM instances i
              LEFT JOIN reports r ON r.instance_id = i.id AND r.created_at > ?1
              GROUP BY i.id
-             ORDER BY max_sev DESC, unread DESC, latest_report DESC",
+             ORDER BY i.in_error DESC, max_sev DESC, unread DESC, latest_report DESC",
         )?;
         let rows = stmt.query_map(params![cutoff, stale_cutoff], |row| {
             Ok(DaemonSummary {
@@ -396,6 +398,7 @@ impl Database {
                 unread_count: row.get(3)?,
                 max_severity: row.get(4)?,
                 running_since: row.get(5)?,
+                in_error: row.get::<_, i32>(7)? != 0,
             })
         })?;
         let mut summaries = Vec::new();
@@ -410,9 +413,17 @@ impl Database {
     pub fn status_line(&self, display_after_days: u32) -> Result<String> {
         let conn = self.conn()?;
         let cutoff = display_cutoff(display_after_days);
+
+        // count errors separately
+        let error_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM reports WHERE is_read=0 AND is_error=1 AND created_at > ?1",
+            params![cutoff],
+            |row| row.get(0),
+        )?;
+
         let mut stmt = conn.prepare(
             "SELECT severity, COUNT(*) FROM reports
-             WHERE is_read=0 AND created_at > ?1
+             WHERE is_read=0 AND is_error=0 AND created_at > ?1
              GROUP BY severity ORDER BY severity DESC",
         )?;
         let rows: Vec<(i32, i64)> = stmt
@@ -420,18 +431,22 @@ impl Database {
             .filter_map(|r| r.ok())
             .collect();
 
-        if rows.is_empty() {
-            return Ok("\u{2705}".to_string());
+        let mut parts: Vec<String> = Vec::new();
+
+        if error_count > 0 {
+            parts.push(format!("\u{274c} {error_count}"));
         }
 
-        let parts: Vec<String> = rows
-            .iter()
-            .map(|(sev, count)| {
-                let emoji = severity_emoji(*sev);
-                format!("{emoji} {count}")
-            })
-            .collect();
-        Ok(parts.join(" | "))
+        for (sev, count) in &rows {
+            let emoji = severity_emoji(*sev);
+            parts.push(format!("{emoji} {count}"));
+        }
+
+        if parts.is_empty() {
+            Ok("\u{2705}".to_string())
+        } else {
+            Ok(parts.join(" | "))
+        }
     }
 
     // -- runner heartbeat --
