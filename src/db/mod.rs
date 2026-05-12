@@ -388,6 +388,7 @@ impl Database {
              FROM instances i
              LEFT JOIN reports r ON r.instance_id = i.id AND r.created_at > ?1
              GROUP BY i.id
+             HAVING latest_report IS NOT NULL
              ORDER BY i.in_error DESC, max_sev DESC, unread DESC, latest_report DESC",
         )?;
         let rows = stmt.query_map(params![cutoff, stale_cutoff], |row| {
