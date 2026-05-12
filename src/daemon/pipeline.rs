@@ -51,11 +51,15 @@ pub async fn dry_run_instance(instance: &DaemonInstance) -> Result<DryRunOutput>
         items
     };
 
-    let analyze_ctx = config::template::build_context_with_since(
-        instance, &filtered, 0, &since,
-    );
-    let rendered_prompt = config::render_template(&config.analyze.prompt, &analyze_ctx)
-        .context("rendering analyze prompt")?;
+    let rendered_prompt = if let Some(ref analyze) = config.analyze {
+        let analyze_ctx = config::template::build_context_with_since(
+            instance, &filtered, 0, &since,
+        );
+        config::render_template(&analyze.prompt, &analyze_ctx)
+            .context("rendering analyze prompt")?
+    } else {
+        String::new()
+    };
 
     Ok(DryRunOutput {
         instance_id: instance.instance_id.clone(),
@@ -194,16 +198,23 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         return Ok(());
     }
 
+    // worker daemons (no [analyze] section) just run the source command
+    let Some(ref analyze) = config.analyze else {
+        db.update_instance_run(instance_id, true)?;
+        tracing::info!(%instance_id, count=filtered.len(), "worker run complete (no analyze)");
+        return Ok(());
+    };
+
     // 3. ANALYZE
     let recent_reports = db.recent_report_summaries(instance_id, 10).unwrap_or_default();
     let analyze_ctx = config::template::build_context_full(
         instance, &filtered, run_count as u64, &since, &recent_reports,
     );
-    let rendered_prompt = config::render_template(&config.analyze.prompt, &analyze_ctx)
+    let rendered_prompt = config::render_template(&analyze.prompt, &analyze_ctx)
         .context("rendering analyze prompt")?;
 
-    let model = config.analyze.model.as_deref().unwrap_or(&global.default_model);
-    let allowed_tools = config.analyze.allowed_tools.as_deref()
+    let model = analyze.model.as_deref().unwrap_or(&global.default_model);
+    let allowed_tools = analyze.allowed_tools.as_deref()
         .unwrap_or(&global.default_allowed_tools);
 
     tracing::info!(%instance_id, prompt_bytes=rendered_prompt.len(), %model, "invoking claude");
@@ -263,6 +274,9 @@ pub async fn replay_report(
         anyhow::bail!("report {} has no stored source items", report.id);
     }
 
+    let analyze = instance.config.analyze.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("cannot replay a worker daemon (no [analyze] config)"))?;
+
     let since = chrono::DateTime::from_timestamp(report.created_at, 0)
         .map(|dt| dt.to_rfc3339())
         .unwrap_or_default();
@@ -271,13 +285,13 @@ pub async fn replay_report(
     let analyze_ctx = config::template::build_context_full(
         instance, &items, 0, &since, &recent_reports,
     );
-    let rendered_prompt = config::render_template(&instance.config.analyze.prompt, &analyze_ctx)
+    let rendered_prompt = config::render_template(&analyze.prompt, &analyze_ctx)
         .context("rendering analyze prompt")?;
 
     let model = model_override
-        .or(instance.config.analyze.model.as_deref())
+        .or(analyze.model.as_deref())
         .unwrap_or(&global.default_model);
-    let allowed_tools = instance.config.analyze.allowed_tools.as_deref()
+    let allowed_tools = analyze.allowed_tools.as_deref()
         .unwrap_or(&global.default_allowed_tools);
 
     let working_dir = instance.config.working_directory.as_deref()

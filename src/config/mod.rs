@@ -58,7 +58,8 @@ pub struct DaemonConfig {
     pub source: SourceConfig,
     #[serde(default)]
     pub filter: Option<FilterConfig>,
-    pub analyze: AnalyzeConfig,
+    #[serde(default)]
+    pub analyze: Option<AnalyzeConfig>,
     #[serde(default)]
     #[allow(dead_code)]
     pub report: ReportConfig,
@@ -276,8 +277,10 @@ pub fn validate_all(config_dir: &Path) -> Result<()> {
         for inst in &instances {
             let ctx = template::build_context(inst, &[], 0);
             let env = template::make_env();
-            env.render_str(&daemon.analyze.prompt, &ctx)
-                .with_context(|| format!("daemon '{}': prompt template error", daemon.name))?;
+            if let Some(ref analyze) = daemon.analyze {
+                env.render_str(&analyze.prompt, &ctx)
+                    .with_context(|| format!("daemon '{}': prompt template error", daemon.name))?;
+            }
             if let Some(ref dk) = daemon.filter.as_ref().and_then(|f| f.dedup_key.clone()) {
                 env.render_str(dk, &ctx)
                     .with_context(|| format!("daemon '{}': dedup_key template error", daemon.name))?;

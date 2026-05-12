@@ -109,7 +109,7 @@ rules = [                                   # optional: field-based filter rules
 dedup_key = "{{field1}}:{{field2}}"         # optional: template for deduplication key
 dedup_window = "30m"                        # optional: suppress duplicates within this window
 
-[analyze]
+[analyze]                                    # optional: omit for worker daemons (no LLM)
 model = "haiku"                             # optional: override global default_model
 allowed_tools = "Bash(kubectl *)"           # optional: --allowedTools passed to claude
 timeout = "5m"                              # optional: kill analysis after this duration
@@ -205,6 +205,26 @@ env = ["staging", "prod"]
 ```
 
 This produces four instances: `my-daemon::api,staging`, `my-daemon::api,prod`, `my-daemon::web,staging`, `my-daemon::web,prod`. Each instance has its own schedule, dedup state, and reports.
+
+### Worker daemons
+
+Omit the `[analyze]` section to create a worker daemon that just runs a command on schedule without LLM analysis. Useful for maintenance tasks like fetching repos or cleaning caches.
+
+```toml
+name = "jj-fetch"
+description = "fetch latest commits"
+schedule = "every 10m"
+working_directory = "~/projects/{{repo}}"
+
+[source]
+command = "jj fetch"
+format = "lines"
+
+[source.params]
+repo = ["api", "web", "infra"]
+```
+
+Worker daemons still show up in the TUI with their last-checked time, and source failures still produce error reports.
 
 ### Prompt requirements
 
