@@ -31,6 +31,7 @@ pub struct App {
     should_quit: bool,
     search_mode: bool,
     search_query: String,
+    pending_resume: Option<(String, Option<String>)>,
 }
 
 impl App {
@@ -48,6 +49,7 @@ impl App {
             should_quit: false,
             search_mode: false,
             search_query: String::new(),
+            pending_resume: None,
         }
     }
 
@@ -112,6 +114,25 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, ap
 
         if app.should_quit {
             return Ok(());
+        }
+
+        if let Some((session_id, working_dir)) = app.pending_resume.take() {
+            // suspend TUI
+            disable_raw_mode()?;
+            crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+            let mut cmd = std::process::Command::new("claude");
+            cmd.arg("--resume").arg(&session_id);
+            if let Some(ref dir) = working_dir {
+                cmd.current_dir(config::resolve_path(dir));
+            }
+            let _ = cmd.status();
+
+            // restore TUI
+            enable_raw_mode()?;
+            crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
+            terminal.clear()?;
+            app.refresh();
         }
     }
 }
@@ -184,7 +205,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         let help_text = match &app.view {
             View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
             View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
-            View::Report { .. } => " j/k:scroll  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
+            View::Report { .. } => " j/k:scroll  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
@@ -203,6 +224,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "R           mark all read (this daemon)",
         "s           toggle source data",
         "y           copy report content",
+        "R           resume claude session",
         "i           copy session id",
         "x           manually run daemon",
         "/           search / filter",
@@ -375,6 +397,13 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
                 && let Some(ref sid) = report.session_id
             {
                 copy_to_clipboard(sid);
+            }
+        }
+        KeyCode::Char('R') => {
+            if let Some(ref report) = app.report.report
+                && let Some(ref sid) = report.session_id
+            {
+                app.pending_resume = Some((sid.clone(), report.working_dir.clone()));
             }
         }
         KeyCode::Char('s') => app.report.toggle_source(),
