@@ -204,8 +204,8 @@ fn draw(f: &mut Frame, app: &mut App) {
     } else {
         let help_text = match &app.view {
             View::Dashboard => " j/k:navigate  Enter:drill in  x:run now  /:search  ?:help  q:quit",
-            View::Detail { .. } => " j/k:navigate  Enter:view  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
-            View::Report { .. } => " j/k:scroll  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
+            View::Detail { .. } => " j/k:navigate  Enter:view  d:delete  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
+            View::Report { .. } => " j/k:scroll  d:delete  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
@@ -219,6 +219,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "j/k or ↑/↓  navigate",
         "Enter       drill in / open report",
         "Esc / q     back / quit",
+        "d           delete report",
         "r           mark report as read",
         "u           mark report as unread",
         "R           mark all read (this daemon)",
@@ -352,6 +353,12 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
                 app.refresh();
             }
         }
+        KeyCode::Char('d') => {
+            if let Some(id) = app.detail.selected_report_id() {
+                let _ = app.db.delete_report(id);
+                app.refresh();
+            }
+        }
         KeyCode::Char('R') => {
             let _ = app.db.mark_all_read(instance_id);
             app.refresh();
@@ -397,6 +404,14 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
                 && let Some(ref sid) = report.session_id
             {
                 copy_to_clipboard(sid);
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(ref report) = app.report.report {
+                let instance_id = report.instance_id.clone();
+                let _ = app.db.delete_report(report_id);
+                app.view = View::Detail { instance_id };
+                app.refresh();
             }
         }
         KeyCode::Char('R') => {

@@ -305,6 +305,11 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_report(&self, report_id: i64) -> Result<()> {
+        self.conn()?.execute("DELETE FROM reports WHERE id=?1", params![report_id])?;
+        Ok(())
+    }
+
     pub fn mark_all_read(&self, instance_id: &str) -> Result<()> {
         self.conn()?.execute(
             "UPDATE reports SET is_read=1 WHERE instance_id=?1 AND is_read=0",
