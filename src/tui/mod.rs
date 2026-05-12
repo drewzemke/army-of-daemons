@@ -27,6 +27,7 @@ enum TimeRange {
     SixHours,
     TwentyFourHours,
     OneWeek,
+    All,
 }
 
 impl TimeRange {
@@ -36,6 +37,7 @@ impl TimeRange {
             Self::SixHours => 6 * 3600,
             Self::TwentyFourHours => 24 * 3600,
             Self::OneWeek => 7 * 86400,
+            Self::All => i64::MAX,
         }
     }
 
@@ -45,6 +47,7 @@ impl TimeRange {
             Self::SixHours => "6h",
             Self::TwentyFourHours => "24h",
             Self::OneWeek => "1w",
+            Self::All => "all",
         }
     }
 
@@ -53,7 +56,8 @@ impl TimeRange {
             Self::OneHour => Self::SixHours,
             Self::SixHours => Self::TwentyFourHours,
             Self::TwentyFourHours => Self::OneWeek,
-            Self::OneWeek => Self::OneHour,
+            Self::OneWeek => Self::All,
+            Self::All => Self::OneHour,
         }
     }
 }
