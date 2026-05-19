@@ -291,7 +291,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         ])
     } else {
         let help_text = match &app.view {
-            View::Dashboard => " j/k:navigate  Enter:drill in  d:dry-run  t:time range  x:run now  /:search  ?:help  q:quit",
+            View::Dashboard => " j/k:navigate  Enter:drill in  r:read all  d:dry-run  t:time range  x:run now  /:search  ?:help  q:quit",
             View::Detail { .. } => " j/k:navigate  Enter:view  D:delete  t:time range  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
             View::Report { .. } => " j/k:scroll  D:delete  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
             View::DryRun => " j/k:scroll  y:copy  Esc:back",
@@ -310,12 +310,11 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "Esc / q     back / quit",
         "d           dry-run daemon (dashboard)",
         "D           delete report",
-        "r           mark report as read",
+        "r           mark read (all in dashboard, single in detail/report)",
         "u           mark report as unread",
-        "R           mark all read (this daemon)",
+        "R           mark all read (detail) / resume session (report)",
         "s           toggle source data",
         "y           copy report content",
-        "R           resume claude session",
         "i           copy session id",
         "t           cycle time range (1h/6h/24h/1w)",
         "x           manually run daemon",
@@ -421,6 +420,12 @@ fn handle_dashboard_key(app: &mut App, key: event::KeyEvent) {
                     }.await;
                     let _ = tx.send(result);
                 });
+            }
+        }
+        KeyCode::Char('r') => {
+            if let Some(id) = app.dashboard.selected_instance_id() {
+                let _ = app.db.mark_all_read(&id);
+                app.refresh();
             }
         }
         KeyCode::Char('x') => {
