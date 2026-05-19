@@ -39,20 +39,23 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     tracing::info!(
         instance_count = instances.len(),
+        max_concurrent = global.max_concurrent,
         "runner starting"
     );
     eprintln!(
-        "army-of-daemons: runner started with {} instances",
-        instances.len()
+        "army-of-daemons: runner started with {} instances (max {} concurrent)",
+        instances.len(),
+        global.max_concurrent
     );
 
     let state = Arc::new(Mutex::new(RunnerState {
         tasks: HashMap::new(),
         running: HashMap::new(),
     }));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(global.max_concurrent));
 
     // start all instance tasks
-    start_instances(&instances, &state, &global, &db).await;
+    start_instances(&instances, &state, &global, &db, &semaphore).await;
 
     // heartbeat task
     let hb_db = db.clone();
@@ -85,9 +88,10 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let reload_global = Arc::clone(&global);
     let reload_db = db.clone();
     let reload_dir = config_dir.clone();
+    let reload_sem = Arc::clone(&semaphore);
 
     let _watcher_handle = tokio::spawn(async move {
-        if let Err(e) = watch_configs(reload_dir, reload_state, reload_global, reload_db).await {
+        if let Err(e) = watch_configs(reload_dir, reload_state, reload_global, reload_db, reload_sem).await {
             tracing::error!(err=%e, "config watcher failed");
         }
     });
@@ -156,6 +160,7 @@ async fn start_instances(
     state: &Arc<Mutex<RunnerState>>,
     global: &Arc<GlobalConfig>,
     db: &Database,
+    semaphore: &Arc<tokio::sync::Semaphore>,
 ) {
     let mut s = state.lock().await;
     for instance in instances {
@@ -167,6 +172,7 @@ async fn start_instances(
         let inst = instance.clone();
         let g = Arc::clone(global);
         let d = db.clone();
+        let sem = Arc::clone(semaphore);
         let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let running_flag = Arc::clone(&running);
 
@@ -186,6 +192,7 @@ async fn start_instances(
                             tracing::warn!(instance=%inst.instance_id, "still running, skipping");
                         } else {
                             running_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let Ok(_permit) = sem.acquire().await else { return };
                             if let Err(e) = super::pipeline::run_instance(&inst, &g, &d).await {
                                 tracing::error!(instance=%inst.instance_id, err=%e, "pipeline failed");
                             }
@@ -202,6 +209,7 @@ async fn start_instances(
                             tracing::warn!(instance=%inst.instance_id, "still running, skipping");
                         } else {
                             running_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let Ok(_permit) = sem.acquire().await else { return };
                             if let Err(e) = super::pipeline::run_instance(&inst, &g, &d).await {
                                 tracing::error!(instance=%inst.instance_id, err=%e, "pipeline failed");
                             }
@@ -222,6 +230,7 @@ async fn watch_configs(
     state: Arc<Mutex<RunnerState>>,
     global: Arc<GlobalConfig>,
     db: Database,
+    semaphore: Arc<tokio::sync::Semaphore>,
 ) -> Result<()> {
     let daemons_dir = config_dir.join("daemons");
     if !daemons_dir.exists() {
@@ -269,7 +278,7 @@ async fn watch_configs(
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
                 // restart
-                start_instances(&instances, &state, &global, &db).await;
+                start_instances(&instances, &state, &global, &db, &semaphore).await;
                 tracing::info!(count = instances.len(), "reloaded");
                 eprintln!("army-of-daemons: reloaded {} instances", instances.len());
             }

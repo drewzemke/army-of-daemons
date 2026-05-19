@@ -21,6 +21,8 @@ pub struct GlobalConfig {
     pub default_model: String,
     #[serde(default)]
     pub default_allowed_tools: String,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
 }
 
 fn default_db_path() -> PathBuf {
@@ -32,6 +34,7 @@ fn default_log_path() -> PathBuf {
 fn default_prune_days() -> u32 { 30 }
 fn default_display_days() -> u32 { 7 }
 fn default_model() -> String { "sonnet".into() }
+fn default_max_concurrent() -> usize { 5 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
@@ -42,6 +45,7 @@ impl Default for GlobalConfig {
             display_after_days: default_display_days(),
             default_model: default_model(),
             default_allowed_tools: String::new(),
+            max_concurrent: default_max_concurrent(),
         }
     }
 }
