@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::config::{self, DaemonInstance, GlobalConfig};
+use crate::config::{self, DaemonInstance, DaemonKind, GlobalConfig, Per};
 use crate::db::Database;
 
 static SEVERITY_RE: LazyLock<Regex> =
@@ -51,14 +51,18 @@ pub async fn dry_run_instance(instance: &DaemonInstance) -> Result<DryRunOutput>
         items
     };
 
-    let rendered_prompt = if let Some(ref analyze) = config.analyze {
-        let analyze_ctx = config::template::build_context_with_since(
-            instance, &filtered, 0, &since,
-        );
-        config::render_template(&analyze.prompt, &analyze_ctx)
-            .context("rendering analyze prompt")?
-    } else {
-        String::new()
+    // preview what the first report would be built from
+    let first_batch = batch_items(config.per, filtered.clone()).into_iter().next().unwrap_or_default();
+    let ctx = config::template::build_context_with_since(instance, &first_batch, 0, &since);
+    let rendered_prompt = match config.kind() {
+        DaemonKind::Analyze => config::render_template(&config.analyze.as_ref().unwrap().prompt, &ctx)
+            .context("rendering analyze prompt")?,
+        DaemonKind::Static if first_batch.is_empty() => String::new(),
+        DaemonKind::Static => {
+            let (title, body) = render_static(config, &ctx)?;
+            format!("{}\n\n{body}", title.unwrap_or_default())
+        }
+        DaemonKind::Worker => String::new(),
     };
 
     Ok(DryRunOutput {
@@ -198,62 +202,90 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
         return Ok(());
     }
 
-    // worker daemons (no [analyze] section) just run the source command
-    let Some(ref analyze) = config.analyze else {
+    if config.kind() == DaemonKind::Worker {
         db.update_instance_run(instance_id, true)?;
-        tracing::info!(%instance_id, count=filtered.len(), "worker run complete (no analyze)");
+        tracing::info!(%instance_id, count=filtered.len(), "worker run complete (no report)");
         return Ok(());
-    };
+    }
 
-    // 3. ANALYZE
-    let recent_reports = db.recent_report_summaries(instance_id, 10).unwrap_or_default();
-    let analyze_ctx = config::template::build_context_full(
-        instance, &filtered, run_count as u64, &since, &recent_reports,
-    );
-    let rendered_prompt = config::render_template(&analyze.prompt, &analyze_ctx)
-        .context("rendering analyze prompt")?;
-
-    let model = analyze.model.as_deref().unwrap_or(&global.default_model);
-    let allowed_tools = analyze.allowed_tools.as_deref()
-        .unwrap_or(&global.default_allowed_tools);
-
-    tracing::info!(%instance_id, prompt_bytes=rendered_prompt.len(), %model, "invoking claude");
-
-    let response = match invoke_claude(&rendered_prompt, model, allowed_tools, working_dir.as_deref()).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::error!(%instance_id, err=%e, "claude invocation failed");
-            report_error(db, instance_id, &format!("claude analysis failed: {e}"))?;
+    for batch in batch_items(config.per, filtered) {
+        let ok = create_report(instance, global, db, &batch, run_count as u64, &since, working_dir.as_deref()).await?;
+        if !ok {
             return Ok(());
         }
+    }
+
+    db.update_instance_run(instance_id, true)?;
+    Ok(())
+}
+
+/// analyze/render one batch and store it as a report. returns false if an
+/// error report was written instead
+async fn create_report(
+    instance: &DaemonInstance,
+    global: &GlobalConfig,
+    db: &Database,
+    batch: &[Value],
+    run_count: u64,
+    since: &str,
+    working_dir: Option<&str>,
+) -> Result<bool> {
+    let instance_id = &instance.instance_id;
+    let config = &instance.config;
+    let recent_reports = db.recent_report_summaries(instance_id, 10).unwrap_or_default();
+    let ctx = config::template::build_context_full(instance, batch, run_count, since, &recent_reports);
+
+    let (severity, title, body, session_id) = if let Some(ref analyze) = config.analyze {
+        // 3. ANALYZE
+        let rendered_prompt = config::render_template(&analyze.prompt, &ctx)
+            .context("rendering analyze prompt")?;
+        let model = analyze.model.as_deref().unwrap_or(&global.default_model);
+        let allowed_tools = analyze.allowed_tools.as_deref()
+            .unwrap_or(&global.default_allowed_tools);
+
+        tracing::info!(%instance_id, prompt_bytes=rendered_prompt.len(), %model, "invoking claude");
+        let response = match invoke_claude(&rendered_prompt, model, allowed_tools, working_dir).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!(%instance_id, err=%e, "claude invocation failed");
+                report_error(db, instance_id, &format!("claude analysis failed: {e}"))?;
+                return Ok(false);
+            }
+        };
+        let (severity, llm_title, body) = parse_response_header(&response.result);
+        let title = match config.title {
+            Some(ref t) => Some(config::render_template(t, &ctx).context("rendering title")?),
+            None => llm_title,
+        };
+        (severity, title, body, response.session_id)
+    } else {
+        let (title, body) = render_static(config, &ctx)?;
+        (0, title, body, None)
     };
 
-    // 4. REPORT — parse severity and title from response header
-    let (severity, title, clean_analysis) = parse_response_header(&response.result);
+    // 4. REPORT
     let dedup_key = config.filter.as_ref()
         .and_then(|f| f.dedup_key.as_ref())
-        .and_then(|tmpl| {
-            let item_ctx = config::template::build_dedup_context(instance, &filtered[0], run_count as u64, &since);
+        .zip(batch.first())
+        .and_then(|(tmpl, item)| {
+            let item_ctx = config::template::build_dedup_context(instance, item, run_count, since);
             config::render_template(tmpl, &item_ctx).ok()
         });
-    let source_json = serde_json::to_string(&filtered).ok();
+    let source_json = serde_json::to_string(batch).ok();
 
     let report_id = db.insert_report(
         instance_id,
         severity,
         title.as_deref(),
         dedup_key.as_deref(),
-        &clean_analysis,
+        &body,
         source_json.as_deref(),
-        response.session_id.as_deref(),
-        working_dir.as_deref(),
+        session_id.as_deref(),
+        working_dir,
         false,
     )?;
-
-    db.update_instance_run(instance_id, true)?;
     tracing::info!(%instance_id, %report_id, %severity, "report created");
-
-    Ok(())
+    Ok(true)
 }
 
 /// re-analyze a report's stored source items with the current prompt
@@ -326,13 +358,25 @@ pub async fn replay_report(
 }
 
 /// split filtered items into one batch per report
-pub fn batch_items(_per: crate::config::Per, _items: Vec<Value>) -> Vec<Vec<Value>> {
-    todo!()
+pub fn batch_items(per: Per, items: Vec<Value>) -> Vec<Vec<Value>> {
+    if items.is_empty() {
+        return vec![];
+    }
+    match per {
+        Per::Run => vec![items],
+        Per::Item => items.into_iter().map(|i| vec![i]).collect(),
+    }
 }
 
 /// render `title` and `body` for a static daemon
-pub fn render_static(_config: &crate::config::DaemonConfig, _ctx: &minijinja::Value) -> Result<(Option<String>, String)> {
-    todo!()
+pub fn render_static(config: &crate::config::DaemonConfig, ctx: &minijinja::Value) -> Result<(Option<String>, String)> {
+    let title = config.title.as_deref()
+        .map(|t| config::render_template(t, ctx))
+        .transpose()
+        .context("rendering title")?;
+    let body = config::render_template(config.body.as_deref().unwrap_or_default(), ctx)
+        .context("rendering body")?;
+    Ok((title, body))
 }
 
 fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {

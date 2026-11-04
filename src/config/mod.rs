@@ -110,7 +110,11 @@ pub struct ActionConfig {
 
 impl DaemonConfig {
     pub fn kind(&self) -> DaemonKind {
-        todo!()
+        match (&self.analyze, &self.body) {
+            (Some(_), _) => DaemonKind::Analyze,
+            (None, Some(_)) => DaemonKind::Static,
+            (None, None) => DaemonKind::Worker,
+        }
     }
 }
 

@@ -569,6 +569,7 @@ pub fn severity_emoji(sev: i32) -> &'static str {
         3 => "\u{1f7e1}",
         2 => "\u{1f535}",
         1 => "\u{26aa}",
+        0 => DEFAULT_ICON,
         _ => "\u{26aa}",
     }
 }
@@ -580,6 +581,7 @@ pub fn severity_label(sev: i32) -> &'static str {
         3 => "medium",
         2 => "low",
         1 => "noise",
+        0 => "none",
         _ => "unknown",
     }
 }

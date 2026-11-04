@@ -92,6 +92,9 @@ name = "my-daemon"
 description = "what this daemon monitors"  # informational only
 schedule = "every 60s"                      # or cron: "*/5 * * * *"
 working_directory = "~/some/path"           # cwd for claude -p (optional)
+per = "run"                                 # "run" (one report per run) or "item" (one per item)
+title = "{{ items | length }} things"       # optional: report title (overrides the LLM's title)
+body = "..."                                # static daemons only: report body template
 
 [source]
 command = "some-command --flag {{params.key}}"  # shell command, rendered as a template
@@ -227,6 +230,14 @@ repo = ["api", "web", "infra"]
 ```
 
 Worker daemons still show up in the TUI with their last-checked time, and source failures still produce error reports.
+
+### Static daemons
+
+Set a top-level `body` (and optionally `title`) instead of `[analyze]` to render reports from templates without an LLM. Static reports have no severity. `body` and `[analyze]` can't be combined.
+
+### Reports per run vs per item
+
+By default each run produces one report covering all filtered items (`per = "run"`). With `per = "item"`, each item gets its own report, and templates can use `{{ item }}` in addition to `{{ items }}`.
 
 ### Prompt requirements
 
