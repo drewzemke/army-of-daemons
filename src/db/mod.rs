@@ -411,7 +411,11 @@ impl Database {
 
     // -- status line --
 
-    pub fn status_line(&self, cutoff_secs: i64) -> Result<String> {
+    /// `icons` maps daemon name -> icon; those daemons get their own segment.
+    /// severity-0 (static) reports without an icon fall under DEFAULT_ICON
+    pub fn status_line(&self, cutoff_secs: i64, _icons: &std::collections::HashMap<String, String>) -> Result<String> {
+        todo!();
+        #[allow(unreachable_code)]
         let conn = self.conn()?;
         let cutoff = display_cutoff_secs(cutoff_secs);
 
@@ -551,6 +555,9 @@ fn map_report(row: &rusqlite::Row) -> rusqlite::Result<Report> {
     })
 }
 
+/// status-bar glyph for static reports from daemons without an icon
+pub const DEFAULT_ICON: &str = "\u{25a0}";
+
 pub fn display_cutoff_secs(secs: i64) -> i64 {
     chrono::Utc::now().timestamp() - secs
 }
@@ -574,5 +581,59 @@ pub fn severity_label(sev: i32) -> &'static str {
         2 => "low",
         1 => "noise",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn temp_db() -> Database {
+        let path = std::env::temp_dir().join(format!(
+            "army-test-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        Database::open(&path).unwrap()
+    }
+
+    fn add(db: &Database, instance: &str, daemon: &str, severity: i32, n: usize) {
+        db.upsert_instance(instance, daemon, None).unwrap();
+        for _ in 0..n {
+            db.insert_report(instance, severity, None, None, "", None, None, None, false).unwrap();
+        }
+    }
+
+    #[test]
+    fn status_line_empty() {
+        assert_eq!(temp_db().status_line(3600, &HashMap::new()).unwrap(), "\u{2705}");
+    }
+
+    #[test]
+    fn status_line_groups_icon_daemons_separately() {
+        let db = temp_db();
+        add(&db, "gh", "gh", 0, 2);
+        add(&db, "plain-static", "plain-static", 0, 1);
+        add(&db, "prs::a", "prs", 5, 1);
+        add(&db, "prs::b", "prs", 3, 2);
+        add(&db, "ci", "ci", 4, 1);
+        let icons = HashMap::from([
+            ("gh".to_string(), "GG".to_string()),
+            ("ci".to_string(), "CI".to_string()),
+        ]);
+        assert_eq!(
+            db.status_line(3600, &icons).unwrap(),
+            format!("CI 1 | GG 2 | {DEFAULT_ICON} 1 | \u{1f534} 1 | \u{1f7e1} 2")
+        );
+    }
+
+    #[test]
+    fn status_line_ignores_read_reports() {
+        let db = temp_db();
+        add(&db, "gh", "gh", 0, 1);
+        db.mark_all_read("gh").unwrap();
+        let icons = HashMap::from([("gh".to_string(), "GG".to_string())]);
+        assert_eq!(db.status_line(3600, &icons).unwrap(), "\u{2705}");
     }
 }

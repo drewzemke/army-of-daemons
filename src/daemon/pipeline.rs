@@ -156,7 +156,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
 
             let mut kept = Vec::new();
             for item in after_rules {
-                let merged_ctx = merge_item_into_context(instance, &item, run_count as u64, &since);
+                let merged_ctx = config::template::build_dedup_context(instance, &item, run_count as u64, &since);
                 let key = config::render_template(dedup_key_template, &merged_ctx)
                     .unwrap_or_default();
 
@@ -233,7 +233,7 @@ pub async fn run_instance(instance: &DaemonInstance, global: &GlobalConfig, db: 
     let dedup_key = config.filter.as_ref()
         .and_then(|f| f.dedup_key.as_ref())
         .and_then(|tmpl| {
-            let item_ctx = merge_item_into_context(instance, &filtered[0], run_count as u64, &since);
+            let item_ctx = config::template::build_dedup_context(instance, &filtered[0], run_count as u64, &since);
             config::render_template(tmpl, &item_ctx).ok()
         });
     let source_json = serde_json::to_string(&filtered).ok();
@@ -323,6 +323,16 @@ pub async fn replay_report(
     )?;
 
     Ok(report_id)
+}
+
+/// split filtered items into one batch per report
+pub fn batch_items(_per: crate::config::Per, _items: Vec<Value>) -> Vec<Vec<Value>> {
+    todo!()
+}
+
+/// render `title` and `body` for a static daemon
+pub fn render_static(_config: &crate::config::DaemonConfig, _ctx: &minijinja::Value) -> Result<(Option<String>, String)> {
+    todo!()
 }
 
 fn report_error(db: &Database, instance_id: &str, message: &str) -> Result<()> {
@@ -429,34 +439,6 @@ async fn invoke_claude(
     Ok(ClaudeResponse { result, session_id })
 }
 
-/// build a template context that has both the instance variables and the item's
-/// fields available at the top level (for dedup_key rendering)
-fn merge_item_into_context(instance: &DaemonInstance, item: &Value, run_count: u64, since: &str) -> minijinja::Value {
-    use std::collections::HashMap;
-
-    let mut map: HashMap<String, minijinja::Value> = HashMap::new();
-
-    // magic variables
-    map.insert("since".into(), minijinja::Value::from(since.to_string()));
-    map.insert("daemon_name".into(), minijinja::Value::from(instance.daemon_name.clone()));
-    map.insert("instance_id".into(), minijinja::Value::from(instance.instance_id.clone()));
-    map.insert("run_number".into(), minijinja::Value::from(run_count));
-
-    // params
-    for (k, v) in &instance.params {
-        map.insert(k.clone(), minijinja::Value::from(v.clone()));
-    }
-
-    // overlay item fields at top level
-    if let Value::Object(obj) = item {
-        for (k, v) in obj {
-            map.insert(k.clone(), minijinja::Value::from_serialize(v));
-        }
-    }
-
-    minijinja::Value::from_serialize(&map)
-}
-
 struct RunningGuard {
     db: Database,
     instance_id: String,
@@ -465,5 +447,50 @@ struct RunningGuard {
 impl Drop for RunningGuard {
     fn drop(&mut self) {
         let _ = self.db.clear_running(&self.instance_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{DaemonConfig, Per};
+    use serde_json::json;
+
+    #[test]
+    fn batching_follows_per() {
+        let items = vec![json!(1), json!(2), json!(3)];
+        assert_eq!(batch_items(Per::Run, items.clone()), vec![items.clone()]);
+        assert_eq!(
+            batch_items(Per::Item, items),
+            vec![vec![json!(1)], vec![json!(2)], vec![json!(3)]]
+        );
+        assert!(batch_items(Per::Run, vec![]).is_empty());
+    }
+
+    #[test]
+    fn static_render_uses_title_and_body() {
+        let config: DaemonConfig = toml::from_str(r#"
+name = "d"
+schedule = "every 1m"
+title = "{{ items | length }} things"
+body = "{% for i in items %}- {{ i }}\n{% endfor %}"
+[source]
+command = "echo"
+"#).unwrap();
+        let ctx = minijinja::Value::from_serialize(json!({"items": [1, 2]}));
+        let (title, body) = render_static(&config, &ctx).unwrap();
+        assert_eq!(title.as_deref(), Some("2 things"));
+        assert_eq!(body, "- 1\n- 2\n");
+
+        let mut untitled = config.clone();
+        untitled.title = None;
+        assert_eq!(render_static(&untitled, &ctx).unwrap().0, None);
+    }
+
+    #[test]
+    fn response_header_parsing_still_works() {
+        let _ = Per::Run;
+        let (sev, title, body) = parse_response_header("# Report: hi\nSeverity: 4\n\nbody");
+        assert_eq!((sev, title.as_deref(), body.as_str()), (4, Some("hi"), "body"));
     }
 }

@@ -1,4 +1,5 @@
 mod dashboard;
+mod flash;
 mod detail;
 mod report_view;
 

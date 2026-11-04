@@ -94,7 +94,7 @@ schedule = "every 60s"                      # or cron: "*/5 * * * *"
 working_directory = "~/some/path"           # cwd for claude -p (optional)
 
 [source]
-command = "some-command --flag {{param}}"   # shell command, rendered as a template
+command = "some-command --flag {{params.key}}"  # shell command, rendered as a template
 format = "jsonl"                            # "jsonl", "json", or "lines"
 success_codes = [0]                         # exit codes that mean success (default: [0])
 max_items = 200                             # truncate to this many items, keeping newest (default: 200)
@@ -106,7 +106,7 @@ key = ["value1", "value2"]
 rules = [                                   # optional: field-based filter rules
   { field = "level", op = "gte", value = 50 }
 ]
-dedup_key = "{{field1}}:{{field2}}"         # optional: template for deduplication key
+dedup_key = "{{item.a}}:{{item.b}}"        # optional: template for deduplication key
 dedup_window = "30m"                        # optional: suppress duplicates within this window
 
 [analyze]                                    # optional: omit for worker daemons (no LLM)
@@ -146,7 +146,7 @@ Source commands and prompts are rendered with [minijinja](https://github.com/mit
 | `{{instance_id}}` | Full instance ID, e.g. `pod-errors::dashboard` |
 | `{{run_number}}` | Monotonic counter per instance |
 
-All keys from `[source.params]` are also available (e.g. `{{repo}}`, `{{name}}`).
+Keys from `[source.params]` are available under `params` (e.g. `{{params.repo}}`).
 
 The analyze prompt gets additional variables:
 
@@ -157,6 +157,8 @@ The analyze prompt gets additional variables:
 | `{{count}}` | Number of items |
 
 Nested item fields are accessed with dot notation: `{{ item.author.login }}`.
+
+`dedup_key` is rendered once per item, with that item available as `item` (e.g. `{{item.id}}`).
 
 Use `{% raw %}...{% endraw %}` to protect sections that contain braces that aren't template syntax (e.g. jj `-T` templates).
 
@@ -214,7 +216,7 @@ Omit the `[analyze]` section to create a worker daemon that just runs a command 
 name = "jj-fetch"
 description = "fetch latest commits"
 schedule = "every 10m"
-working_directory = "~/projects/{{repo}}"
+working_directory = "~/projects/{{params.repo}}"
 
 [source]
 command = "jj fetch"

@@ -67,6 +67,51 @@ pub struct DaemonConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub report: ReportConfig,
+    #[serde(default)]
+    pub per: Per,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub on_read: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<ActionConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Per {
+    #[default]
+    Run,
+    Item,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonKind {
+    /// LLM writes the report and assigns severity
+    Analyze,
+    /// runs the source command, no report
+    Worker,
+    /// report rendered from `title`/`body` templates, no severity
+    Static,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActionConfig {
+    pub key: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub when: Option<String>,
+}
+
+impl DaemonConfig {
+    pub fn kind(&self) -> DaemonKind {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -255,6 +300,11 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
     }
 }
 
+/// structural + template checks for a single daemon
+pub fn validate_daemon(_config: &DaemonConfig) -> Result<()> {
+    todo!()
+}
+
 pub fn validate_all(config_dir: &Path) -> Result<()> {
     let _global = load_global(config_dir)?;
     let daemons = load_daemons(config_dir)?;
@@ -286,6 +336,7 @@ pub fn validate_all(config_dir: &Path) -> Result<()> {
                     .with_context(|| format!("daemon '{}': prompt template error", daemon.name))?;
             }
             if let Some(ref dk) = daemon.filter.as_ref().and_then(|f| f.dedup_key.clone()) {
+                let ctx = template::build_dedup_context(inst, &serde_json::json!({}), 0, "");
                 env.render_str(dk, &ctx)
                     .with_context(|| format!("daemon '{}': dedup_key template error", daemon.name))?;
             }
@@ -294,4 +345,101 @@ pub fn validate_all(config_dir: &Path) -> Result<()> {
 
     println!("total instances: {total_instances}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(toml_str: &str) -> DaemonConfig {
+        toml::from_str(toml_str).expect("valid toml")
+    }
+
+    const BASE: &str = r#"
+name = "d"
+schedule = "every 1m"
+[source]
+command = "echo"
+"#;
+
+    fn with(extra_top: &str, extra_tail: &str) -> DaemonConfig {
+        parse(&format!("{extra_top}\n{BASE}\n{extra_tail}"))
+    }
+
+    #[test]
+    fn kind_is_inferred_from_sections() {
+        assert_eq!(with("", "").kind(), DaemonKind::Worker);
+        assert_eq!(with("", "[analyze]\nprompt = \"hi\"").kind(), DaemonKind::Analyze);
+        assert_eq!(with("body = \"hi\"", "").kind(), DaemonKind::Static);
+        // title alone doesn't make a static daemon
+        assert_eq!(with("title = \"t\"", "").kind(), DaemonKind::Worker);
+    }
+
+    #[test]
+    fn per_defaults_to_run() {
+        assert_eq!(with("", "").per, Per::Run);
+        assert_eq!(with("per = \"item\"", "").per, Per::Item);
+    }
+
+    #[test]
+    fn worker_static_and_analyze_validate() {
+        validate_daemon(&with("", "")).unwrap();
+        validate_daemon(&with("body = \"{{ items | length }}\"", "")).unwrap();
+        validate_daemon(&with("title = \"{{ params.x }}\"", "[analyze]\nprompt = \"hi\"")).unwrap();
+    }
+
+    #[test]
+    fn body_with_analyze_is_rejected() {
+        let c = with("body = \"hi\"", "[analyze]\nprompt = \"hi\"");
+        let err = validate_daemon(&c).unwrap_err().to_string();
+        assert!(err.contains("body"), "{err}");
+    }
+
+    #[test]
+    fn item_on_per_run_is_rejected() {
+        for (top, tail) in [
+            ("body = \"{{ item.x }}\"", ""),
+            ("title = \"{{ item.x }}\"\nbody = \"b\"", ""),
+            ("on_read = \"echo {{ item.x }}\"", ""),
+            ("", "[[actions]]\nkey = \"o\"\nname = \"o\"\ncommand = \"open {{ item.url }}\""),
+            ("", "[[actions]]\nkey = \"o\"\nname = \"o\"\ncommand = \"true\"\nwhen = \"item.url\""),
+        ] {
+            let c = with(top, tail);
+            assert!(validate_daemon(&c).is_err(), "expected error for {top} / {tail}");
+            let c = with(&format!("per = \"item\"\n{top}"), tail);
+            validate_daemon(&c).unwrap_or_else(|e| panic!("per=item should allow {top} / {tail}: {e}"));
+        }
+    }
+
+    #[test]
+    fn loop_variable_named_item_is_fine_on_per_run() {
+        let c = with("body = \"{% for item in items %}{{ item.x }}{% endfor %}\"", "");
+        validate_daemon(&c).unwrap();
+    }
+
+    #[test]
+    fn action_keys_must_be_single_unique_chars() {
+        let dup = with("", r#"
+[[actions]]
+key = "o"
+name = "a"
+command = "true"
+[[actions]]
+key = "o"
+name = "b"
+command = "true"
+"#);
+        assert!(validate_daemon(&dup).is_err());
+
+        for bad in ["", "oo", "esc"] {
+            let c = with("", &format!("[[actions]]\nkey = \"{bad}\"\nname = \"a\"\ncommand = \"true\""));
+            assert!(validate_daemon(&c).is_err(), "key {bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn broken_templates_are_rejected() {
+        assert!(validate_daemon(&with("body = \"{{ oops\"", "")).is_err());
+        assert!(validate_daemon(&with("", "[[actions]]\nkey = \"o\"\nname = \"a\"\ncommand = \"true\"\nwhen = \"((\"")).is_err());
+    }
 }
