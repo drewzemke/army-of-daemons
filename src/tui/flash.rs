@@ -18,16 +18,16 @@ pub struct Flash {
 }
 
 impl Flash {
-    pub fn info(_msg: impl Into<String>) -> Self {
-        todo!()
+    pub fn info(msg: impl Into<String>) -> Self {
+        Self { msg: msg.into(), level: Level::Info, at: Instant::now() }
     }
 
-    pub fn error(_msg: impl Into<String>) -> Self {
-        todo!()
+    pub fn error(msg: impl Into<String>) -> Self {
+        Self { msg: msg.into(), level: Level::Error, at: Instant::now() }
     }
 
-    pub fn expired(&self, _now: Instant) -> bool {
-        todo!()
+    pub fn expired(&self, now: Instant) -> bool {
+        self.level == Level::Info && now.duration_since(self.at) > SUCCESS_TTL
     }
 }
 

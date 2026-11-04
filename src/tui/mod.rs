@@ -85,6 +85,7 @@ pub struct App {
     search_mode: bool,
     search_query: String,
     pending_resume: Option<(String, Option<String>)>,
+    flash: Option<flash::Flash>,
 }
 
 impl App {
@@ -105,6 +106,7 @@ impl App {
             search_mode: false,
             search_query: String::new(),
             pending_resume: None,
+            flash: None,
         }
     }
 
@@ -274,12 +276,21 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     // status bar
     let status_bar = chunks[chunk_idx];
+    if app.flash.as_ref().is_some_and(|fl| fl.expired(std::time::Instant::now())) {
+        app.flash = None;
+    }
     let bar = if app.search_mode {
         Line::from(vec![
             Span::styled(" /", Style::default().fg(Color::Yellow)),
             Span::styled(&app.search_query, Style::default().fg(Color::White)),
             Span::styled("▌", Style::default().fg(Color::Yellow)),
         ])
+    } else if let Some(ref fl) = app.flash {
+        let color = match fl.level {
+            flash::Level::Info => Color::DarkGray,
+            flash::Level::Error => Color::Red,
+        };
+        Line::from(Span::styled(format!(" {}", fl.msg), Style::default().fg(color)))
     } else if !app.search_query.is_empty() {
         let hint = match &app.view {
             View::Dashboard => " j/k:navigate  Enter:drill in  /:search  Esc:clear",
@@ -334,6 +345,11 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.should_quit = true;
         return;
+    }
+
+    // errors stick until the next keypress
+    if app.flash.as_ref().is_some_and(|fl| fl.level == flash::Level::Error) {
+        app.flash = None;
     }
 
     if app.show_help {
@@ -491,7 +507,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
             if let Some(id) = app.detail.selected_report_id()
                 && let Ok(Some(report)) = app.db.get_report(id)
             {
-                copy_to_clipboard(&report.format_text());
+                copy_to_clipboard(app, &report.format_text());
             }
         }
         _ => {}
@@ -519,15 +535,13 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
             app.refresh();
         }
         KeyCode::Char('y') => {
-            if let Some(ref report) = app.report.report {
-                copy_to_clipboard(&report.format_text());
+            if let Some(text) = app.report.report.as_ref().map(|r| r.format_text()) {
+                copy_to_clipboard(app, &text);
             }
         }
         KeyCode::Char('i') => {
-            if let Some(ref report) = app.report.report
-                && let Some(ref sid) = report.session_id
-            {
-                copy_to_clipboard(sid);
+            if let Some(sid) = app.report.report.as_ref().and_then(|r| r.session_id.clone()) {
+                copy_to_clipboard(app, &sid);
             }
         }
         KeyCode::Char('D') => {
@@ -559,8 +573,8 @@ fn handle_dry_run_key(app: &mut App, key: event::KeyEvent) {
             app.view = View::Dashboard;
         }
         KeyCode::Char('y') => {
-            if let Some(ref state) = app.dry_run {
-                copy_to_clipboard(&state.content);
+            if let Some(text) = app.dry_run.as_ref().map(|s| s.content.clone()) {
+                copy_to_clipboard(app, &text);
             }
         }
         KeyCode::Char('j') | KeyCode::Down => {
@@ -600,13 +614,13 @@ fn draw_dry_run(f: &mut Frame, area: Rect, state: &Option<DryRunState>) {
     f.render_widget(para, area);
 }
 
-fn copy_to_clipboard(text: &str) {
-    match arboard::Clipboard::new() {
-        Ok(mut cb) => {
-            let _ = cb.set_text(text);
-        }
+fn copy_to_clipboard(app: &mut App, text: &str) {
+    let result = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
+    app.flash = Some(match result {
+        Ok(()) => flash::Flash::info("copied"),
         Err(e) => {
             tracing::warn!(err=%e, "clipboard unavailable");
+            flash::Flash::error(format!("copy failed: {e}"))
         }
-    }
+    });
 }
