@@ -305,8 +305,46 @@ pub fn parse_duration(s: &str) -> Result<std::time::Duration> {
 }
 
 /// structural + template checks for a single daemon
-pub fn validate_daemon(_config: &DaemonConfig) -> Result<()> {
-    todo!()
+pub fn validate_daemon(config: &DaemonConfig) -> Result<()> {
+    let name = &config.name;
+    if config.body.is_some() && config.analyze.is_some() {
+        bail!("daemon '{name}': `body` can't be combined with [analyze]");
+    }
+
+    let env = template::make_env();
+    let mut templates: Vec<(String, &str)> = Vec::new();
+    templates.extend(config.title.as_deref().map(|t| ("title".to_string(), t)));
+    templates.extend(config.body.as_deref().map(|t| ("body".to_string(), t)));
+    templates.extend(config.on_read.as_deref().map(|t| ("on_read".to_string(), t)));
+
+    let mut keys = std::collections::HashSet::new();
+    for action in &config.actions {
+        let label = format!("action '{}'", action.name);
+        if action.key.chars().count() != 1 {
+            bail!("daemon '{name}': {label}: key must be a single character, got {:?}", action.key);
+        }
+        if !keys.insert(&action.key) {
+            bail!("daemon '{name}': {label}: duplicate key '{}'", action.key);
+        }
+        templates.push((format!("{label} command"), &action.command));
+
+        if let Some(ref when) = action.when {
+            let expr = env.compile_expression(when)
+                .with_context(|| format!("daemon '{name}': {label}: invalid `when`"))?;
+            if config.per == Per::Run && expr.undeclared_variables(false).contains("item") {
+                bail!("daemon '{name}': {label}: `when` uses `item`, which needs per = \"item\"");
+            }
+        }
+    }
+
+    for (label, src) in templates {
+        let tmpl = env.template_from_str(src)
+            .with_context(|| format!("daemon '{name}': {label} template error"))?;
+        if config.per == Per::Run && tmpl.undeclared_variables(false).contains("item") {
+            bail!("daemon '{name}': {label} uses `item`, which needs per = \"item\"");
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_all(config_dir: &Path) -> Result<()> {
@@ -323,6 +361,7 @@ pub fn validate_all(config_dir: &Path) -> Result<()> {
         let instances = expand_instances(daemon);
         total_instances += instances.len();
         println!("  {} -> {} instance(s)", daemon.name, instances.len());
+        validate_daemon(daemon)?;
 
         // validate schedule
         if daemon.schedule.starts_with("every ") {

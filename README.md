@@ -123,6 +123,14 @@ Your prompt here. Uses Jinja2 syntax (minijinja).
 
 [report]
 notify = true                               # default: true
+
+on_read = "some-command {{item.id}}"        # optional: runs when a report is marked read
+
+[[actions]]                                 # optional: run with `a` + key in the TUI
+key = "o"
+name = "open"
+when = "item.url"                           # optional: minijinja expression; hidden if falsy
+command = "open {{item.url}}"
 ```
 
 ### Schedule syntax
@@ -235,6 +243,12 @@ Worker daemons still show up in the TUI with their last-checked time, and source
 ### Static daemons
 
 Set a top-level `body` (and optionally `title`) instead of `[analyze]` to render reports from templates without an LLM. Static reports have no severity. `body` and `[analyze]` can't be combined.
+
+### Actions and on_read
+
+`[[actions]]` are shell commands you can run on a report from the TUI: press `a`, then the action's key. `on_read` runs whenever a report goes from unread to read; if it fails, the report is marked unread again and the error shows in the bottom bar.
+
+Both are rendered with the report's context (`params`, `items`, and `item` for per-item daemons) and run in the background with no TTY, so wrap anything interactive in e.g. `zellij run -- ...`. Action keys must be single characters, unique within the daemon.
 
 ### Reports per run vs per item
 

@@ -3,13 +3,35 @@ use anyhow::Result;
 use minijinja::Value;
 
 /// actions whose `when` expression is truthy for this report (or that have no `when`)
-pub fn available<'a>(_actions: &'a [ActionConfig], _ctx: &Value) -> Vec<&'a ActionConfig> {
-    todo!()
+pub fn available<'a>(actions: &'a [ActionConfig], ctx: &Value) -> Vec<&'a ActionConfig> {
+    let env = crate::config::template::make_env();
+    actions
+        .iter()
+        .filter(|a| match a.when {
+            None => true,
+            Some(ref when) => env
+                .compile_expression(when)
+                .and_then(|e| e.eval(ctx))
+                .is_ok_and(|v| v.is_true()),
+        })
+        .collect()
 }
 
 /// render and run a shell command; errors carry the first line of stderr
-pub async fn run_command(_template: &str, _ctx: &Value, _working_dir: Option<&str>) -> Result<()> {
-    todo!()
+pub async fn run_command(template: &str, ctx: &Value, working_dir: Option<&str>) -> Result<()> {
+    let cmd = crate::config::render_template(template, ctx)?;
+    let mut proc = tokio::process::Command::new("sh");
+    proc.arg("-c").arg(&cmd).stdin(std::process::Stdio::null());
+    if let Some(dir) = working_dir {
+        proc.current_dir(crate::config::resolve_path(dir));
+    }
+    let output = proc.output().await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        anyhow::bail!("exit {}: {first}", output.status.code().unwrap_or(-1));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
