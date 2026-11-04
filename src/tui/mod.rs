@@ -10,7 +10,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use std::path::Path;
 
-use crate::config;
+use crate::config::{self, ActionConfig, DaemonInstance};
 use crate::daemon;
 use crate::db::Database;
 
@@ -86,10 +86,24 @@ pub struct App {
     search_query: String,
     pending_resume: Option<(String, Option<String>)>,
     flash: Option<flash::Flash>,
+    instances: std::collections::HashMap<String, DaemonInstance>,
+    /// set while waiting for an action key after `a`
+    action_mode: Option<(i64, Vec<ActionConfig>)>,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<CmdResult>,
+    cmd_rx: tokio::sync::mpsc::UnboundedReceiver<CmdResult>,
+}
+
+/// outcome of a background action or on_read hook
+struct CmdResult {
+    label: String,
+    /// report to mark unread again if the command failed (on_read)
+    rollback: Option<i64>,
+    result: Result<()>,
 }
 
 impl App {
     fn new(db: Database, config_dir: std::path::PathBuf) -> Self {
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             db,
             config_dir,
@@ -107,10 +121,102 @@ impl App {
             search_query: String::new(),
             pending_resume: None,
             flash: None,
+            instances: Default::default(),
+            action_mode: None,
+            cmd_tx,
+            cmd_rx,
+        }
+    }
+
+    fn load_instances(&mut self) {
+        let daemons = config::load_daemons(&self.config_dir).unwrap_or_default();
+        self.instances = daemon::runner::expand_all(&daemons)
+            .into_iter()
+            .map(|i| (i.instance_id.clone(), i))
+            .collect();
+    }
+
+    fn current_report_id(&self) -> Option<i64> {
+        match self.view {
+            View::Detail { .. } => self.detail.selected_report_id(),
+            View::Report { report_id } => Some(report_id),
+            _ => None,
+        }
+    }
+
+    /// mark reports read, firing on_read in the background for ones that were unread
+    fn mark_read(&mut self, ids: &[i64]) {
+        for &id in ids {
+            let Ok(Some(report)) = self.db.get_report(id) else { continue };
+            if report.is_read {
+                continue;
+            }
+            let _ = self.db.mark_read(id);
+            let Some(instance) = self.instances.get(&report.instance_id) else { continue };
+            let Some(ref on_read) = instance.config.on_read else { continue };
+            let ctx = config::template::build_report_context(instance, &report);
+            self.spawn_cmd("on_read".into(), on_read.clone(), ctx, report.working_dir.clone(), Some(id));
+        }
+    }
+
+    fn spawn_cmd(
+        &self,
+        label: String,
+        command: String,
+        ctx: minijinja::Value,
+        working_dir: Option<String>,
+        rollback: Option<i64>,
+    ) {
+        let tx = self.cmd_tx.clone();
+        tokio::spawn(async move {
+            let result = crate::actions::run_command(&command, &ctx, working_dir.as_deref()).await;
+            let _ = tx.send(CmdResult { label, rollback, result });
+        });
+    }
+
+    fn enter_action_mode(&mut self) {
+        let Some(id) = self.current_report_id() else { return };
+        let Ok(Some(report)) = self.db.get_report(id) else { return };
+        let actions = self.instances.get(&report.instance_id).map(|instance| {
+            let ctx = config::template::build_report_context(instance, &report);
+            crate::actions::available(&instance.config.actions, &ctx)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        }).unwrap_or_default();
+        if actions.is_empty() {
+            self.flash = Some(flash::Flash::info("no actions for this report"));
+        } else {
+            self.flash = None;
+            self.action_mode = Some((id, actions));
+        }
+    }
+
+    fn run_action(&mut self, report_id: i64, action: &ActionConfig) {
+        let Ok(Some(report)) = self.db.get_report(report_id) else { return };
+        let Some(instance) = self.instances.get(&report.instance_id) else { return };
+        let ctx = config::template::build_report_context(instance, &report);
+        self.spawn_cmd(action.name.clone(), action.command.clone(), ctx, report.working_dir.clone(), None);
+    }
+
+    fn drain_cmd_results(&mut self) {
+        while let Ok(res) = self.cmd_rx.try_recv() {
+            self.flash = Some(match res.result {
+                Ok(()) if res.rollback.is_some() => continue,
+                Ok(()) => flash::Flash::info(format!("{} \u{2713}", res.label)),
+                Err(e) => {
+                    if let Some(id) = res.rollback {
+                        let _ = self.db.mark_unread(id);
+                        self.refresh();
+                    }
+                    flash::Flash::error(format!("{} failed: {e}", res.label))
+                }
+            });
         }
     }
 
     fn refresh(&mut self) {
+        self.load_instances();
         // check runner heartbeat
         self.runner_healthy = match self.db.read_heartbeat() {
             Ok(Some(ts)) => {
@@ -170,6 +276,8 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, ap
             app.refresh();
             last_refresh = std::time::Instant::now();
         }
+
+        app.drain_cmd_results();
 
         if app.should_quit {
             return Ok(());
@@ -291,6 +399,12 @@ fn draw(f: &mut Frame, app: &mut App) {
             flash::Level::Error => Color::Red,
         };
         Line::from(Span::styled(format!(" {}", fl.msg), Style::default().fg(color)))
+    } else if let Some((_, ref actions)) = app.action_mode {
+        let hints: Vec<String> = actions.iter().map(|a| format!("{}:{}", a.key, a.name)).collect();
+        Line::from(vec![
+            Span::styled(" action ", Style::default().fg(Color::Black).bg(Color::Yellow)),
+            Span::styled(format!("  {}  Esc:cancel", hints.join("  ")), Style::default().fg(Color::Yellow)),
+        ])
     } else if !app.search_query.is_empty() {
         let hint = match &app.view {
             View::Dashboard => " j/k:navigate  Enter:drill in  /:search  Esc:clear",
@@ -304,8 +418,8 @@ fn draw(f: &mut Frame, app: &mut App) {
     } else {
         let help_text = match &app.view {
             View::Dashboard => " j/k:navigate  Enter:drill in  r:read all  d:dry-run  t:time range  x:run now  /:search  ?:help  q:quit",
-            View::Detail { .. } => " j/k:navigate  Enter:view  D:delete  t:time range  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
-            View::Report { .. } => " j/k:scroll  D:delete  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
+            View::Detail { .. } => " j/k:navigate  Enter:view  a:actions  D:delete  t:time range  r:read  u:unread  R:read all  /:search  y:copy  Esc:back",
+            View::Report { .. } => " j/k:scroll  a:actions  D:delete  R:resume  s:source  y:copy  i:session id  r:read  u:unread  Esc:back",
             View::DryRun => " j/k:scroll  y:copy  Esc:back",
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
@@ -325,6 +439,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         "r           mark read (all in dashboard, single in detail/report)",
         "u           mark report as unread",
         "R           mark all read (detail) / resume session (report)",
+        "a           run an action on the report",
         "s           toggle source data",
         "y           copy report content",
         "i           copy session id",
@@ -354,6 +469,15 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
 
     if app.show_help {
         app.show_help = false;
+        return;
+    }
+
+    if let Some((report_id, actions)) = app.action_mode.take() {
+        if let KeyCode::Char(c) = key.code
+            && let Some(action) = actions.iter().find(|a| a.key.starts_with(c))
+        {
+            app.run_action(report_id, action);
+        }
         return;
     }
 
@@ -389,6 +513,10 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
         }
         KeyCode::Char('/') if !matches!(app.view, View::Report { .. }) => {
             app.search_mode = true;
+            return;
+        }
+        KeyCode::Char('a') if matches!(app.view, View::Detail { .. } | View::Report { .. }) => {
+            app.enter_action_mode();
             return;
         }
         _ => {}
@@ -441,7 +569,8 @@ fn handle_dashboard_key(app: &mut App, key: event::KeyEvent) {
         }
         KeyCode::Char('r') => {
             if let Some(id) = app.dashboard.selected_instance_id() {
-                let _ = app.db.mark_all_read(&id);
+                let ids = app.db.unread_report_ids(&id).unwrap_or_default();
+                app.mark_read(&ids);
                 app.refresh();
             }
         }
@@ -475,7 +604,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
         KeyCode::Char('k') | KeyCode::Up => app.detail.prev(),
         KeyCode::Enter => {
             if let Some(id) = app.detail.selected_report_id() {
-                let _ = app.db.mark_read(id);
+                app.mark_read(&[id]);
                 app.search_query.clear();
                 app.view = View::Report { report_id: id };
                 app.refresh();
@@ -483,7 +612,7 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
         }
         KeyCode::Char('r') => {
             if let Some(id) = app.detail.selected_report_id() {
-                let _ = app.db.mark_read(id);
+                app.mark_read(&[id]);
                 app.refresh();
             }
         }
@@ -500,7 +629,8 @@ fn handle_detail_key(app: &mut App, key: event::KeyEvent, instance_id: &str) {
             }
         }
         KeyCode::Char('R') => {
-            let _ = app.db.mark_all_read(instance_id);
+            let ids = app.db.unread_report_ids(instance_id).unwrap_or_default();
+            app.mark_read(&ids);
             app.refresh();
         }
         KeyCode::Char('y') => {
@@ -527,7 +657,7 @@ fn handle_report_key(app: &mut App, key: event::KeyEvent, report_id: i64) {
             app.refresh();
         }
         KeyCode::Char('r') => {
-            let _ = app.db.mark_read(report_id);
+            app.mark_read(&[report_id]);
             app.refresh();
         }
         KeyCode::Char('u') => {

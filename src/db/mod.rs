@@ -311,12 +311,12 @@ impl Database {
         Ok(())
     }
 
-    pub fn mark_all_read(&self, instance_id: &str) -> Result<()> {
-        self.conn()?.execute(
-            "UPDATE reports SET is_read=1 WHERE instance_id=?1 AND is_read=0",
-            params![instance_id],
-        )?;
-        Ok(())
+    pub fn unread_report_ids(&self, instance_id: &str) -> Result<Vec<i64>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT id FROM reports WHERE instance_id=?1 AND is_read=0")?;
+        let ids = stmt.query_map(params![instance_id], |row| row.get(0))?
+            .collect::<Result<Vec<i64>, _>>()?;
+        Ok(ids)
     }
 
     pub fn get_report(&self, report_id: i64) -> Result<Option<Report>> {
@@ -650,7 +650,9 @@ mod tests {
     fn status_line_ignores_read_reports() {
         let db = temp_db();
         add(&db, "gh", "gh", 0, 1);
-        db.mark_all_read("gh").unwrap();
+        for id in db.unread_report_ids("gh").unwrap() {
+            db.mark_read(id).unwrap();
+        }
         let icons = HashMap::from([("gh".to_string(), "GG".to_string())]);
         assert_eq!(db.status_line(3600, &icons).unwrap(), "\u{2705}");
     }

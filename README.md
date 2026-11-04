@@ -281,6 +281,7 @@ The prompt is piped to claude via stdin (not as a CLI argument) to avoid shell e
 | `r` | Mark report as read |
 | `R` | Mark all read for this daemon |
 | `y` | Copy report ID to clipboard |
+| `a` | Run one of the report's actions (then press its key, `Esc` to cancel) |
 | `Y` | Copy report content to clipboard |
 | `x` | Manually trigger a daemon run |
 | `/` | Search / filter |
