@@ -413,9 +413,8 @@ impl Database {
 
     /// `icons` maps daemon name -> icon; those daemons get their own segment.
     /// severity-0 (static) reports without an icon fall under DEFAULT_ICON
-    pub fn status_line(&self, cutoff_secs: i64, _icons: &std::collections::HashMap<String, String>) -> Result<String> {
-        todo!();
-        #[allow(unreachable_code)]
+    pub fn status_line(&self, cutoff_secs: i64, icons: &std::collections::HashMap<String, String>) -> Result<String> {
+        use std::collections::BTreeMap;
         let conn = self.conn()?;
         let cutoff = display_cutoff_secs(cutoff_secs);
 
@@ -427,24 +426,41 @@ impl Database {
         )?;
 
         let mut stmt = conn.prepare(
-            "SELECT severity, COUNT(*) FROM reports
-             WHERE is_read=0 AND is_error=0 AND created_at > ?1
-             GROUP BY severity ORDER BY severity DESC",
+            "SELECT i.daemon_name, r.severity, COUNT(*) FROM reports r
+             JOIN instances i ON i.id = r.instance_id
+             WHERE r.is_read=0 AND r.is_error=0 AND r.created_at > ?1
+             GROUP BY i.daemon_name, r.severity",
         )?;
-        let rows: Vec<(i32, i64)> = stmt
-            .query_map(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))?
+        let rows: Vec<(String, i32, i64)> = stmt
+            .query_map(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .filter_map(|r| r.ok())
             .collect();
 
-        let mut parts: Vec<String> = Vec::new();
+        let mut by_icon: BTreeMap<&str, i64> = BTreeMap::new();
+        let mut default_count = 0;
+        let mut by_severity: BTreeMap<std::cmp::Reverse<i32>, i64> = BTreeMap::new();
+        for (daemon, sev, count) in &rows {
+            if let Some(icon) = icons.get(daemon) {
+                *by_icon.entry(icon).or_default() += count;
+            } else if *sev == 0 {
+                default_count += count;
+            } else {
+                *by_severity.entry(std::cmp::Reverse(*sev)).or_default() += count;
+            }
+        }
 
+        let mut parts: Vec<String> = Vec::new();
         if error_count > 0 {
             parts.push(format!("\u{274c} {error_count}"));
         }
-
-        for (sev, count) in &rows {
-            let emoji = severity_emoji(*sev);
-            parts.push(format!("{emoji} {count}"));
+        for (icon, count) in by_icon {
+            parts.push(format!("{icon} {count}"));
+        }
+        if default_count > 0 {
+            parts.push(format!("{DEFAULT_ICON} {default_count}"));
+        }
+        for (std::cmp::Reverse(sev), count) in by_severity {
+            parts.push(format!("{} {count}", severity_emoji(sev)));
         }
 
         if parts.is_empty() {

@@ -92,6 +92,7 @@ name = "my-daemon"
 description = "what this daemon monitors"  # informational only
 schedule = "every 60s"                      # or cron: "*/5 * * * *"
 working_directory = "~/some/path"           # cwd for claude -p (optional)
+icon = "GG"                                 # optional: own segment in `army status`
 per = "run"                                 # "run" (one report per run) or "item" (one per item)
 title = "{{ items | length }} things"       # optional: report title (overrides the LLM's title)
 body = "..."                                # static daemons only: report body template
@@ -273,7 +274,7 @@ The prompt is piped to claude via stdin (not as a CLI argument) to avoid shell e
 
 ## Status bar integration
 
-`army status` prints a single line like `🔴 3 | 🟡 2` showing unread counts by severity. If there are no unreads, it prints `✅`. This is designed to be embedded in a terminal status bar (zellij, tmux, etc.).
+`army status` prints a single line like `🔴 3 | 🟡 2` showing unread counts by severity. If there are no unreads, it prints `✅`. Daemons with an `icon` get their own segment (`GG 4 | 🔴 3`), and static reports from daemons without one are counted under `■`. This is designed to be embedded in a terminal status bar (zellij, tmux, etc.).
 
 ## Runner details
 
