@@ -55,8 +55,11 @@ pub async fn dry_run_instance(instance: &DaemonInstance) -> Result<DryRunOutput>
     let first_batch = batch_items(config.per, filtered.clone()).into_iter().next().unwrap_or_default();
     let ctx = config::template::build_context_with_since(instance, &first_batch, 0, &since);
     let rendered_prompt = match config.kind() {
-        DaemonKind::Analyze => config::render_template(&config.analyze.as_ref().unwrap().prompt, &ctx)
-            .context("rendering analyze prompt")?,
+        DaemonKind::Analyze => {
+            let prompt = config::render_template(&config.analyze.as_ref().unwrap().prompt, &ctx)
+                .context("rendering analyze prompt")?;
+            prompt + &crate::actions::offer_instructions(&config.actions).unwrap_or_default()
+        }
         DaemonKind::Static if first_batch.is_empty() => String::new(),
         DaemonKind::Static => {
             let (title, body) = render_static(config, &ctx)?;
@@ -235,10 +238,13 @@ async fn create_report(
     let recent_reports = db.recent_report_summaries(instance_id, 10).unwrap_or_default();
     let ctx = config::template::build_context_full(instance, batch, run_count, since, &recent_reports);
 
-    let (severity, title, body, session_id) = if let Some(ref analyze) = config.analyze {
+    let (severity, title, body, session_id, offers) = if let Some(ref analyze) = config.analyze {
         // 3. ANALYZE
-        let rendered_prompt = config::render_template(&analyze.prompt, &ctx)
+        let mut rendered_prompt = config::render_template(&analyze.prompt, &ctx)
             .context("rendering analyze prompt")?;
+        if let Some(extra) = crate::actions::offer_instructions(&config.actions) {
+            rendered_prompt.push_str(&extra);
+        }
         let model = analyze.model.as_deref().unwrap_or(&global.default_model);
         let allowed_tools = analyze.allowed_tools.as_deref()
             .unwrap_or(&global.default_allowed_tools);
@@ -252,15 +258,16 @@ async fn create_report(
                 return Ok(false);
             }
         };
-        let (severity, llm_title, body) = parse_response_header(&response.result);
+        let (response_body, offers) = crate::actions::extract_offers(&response.result, &config.actions);
+        let (severity, llm_title, body) = parse_response_header(&response_body);
         let title = match config.title {
             Some(ref t) => Some(config::render_template(t, &ctx).context("rendering title")?),
             None => llm_title,
         };
-        (severity, title, body, response.session_id)
+        (severity, title, body, response.session_id, offers)
     } else {
         let (title, body) = render_static(config, &ctx)?;
-        (0, title, body, None)
+        (0, title, body, None, vec![])
     };
 
     // 4. REPORT
@@ -284,7 +291,10 @@ async fn create_report(
         working_dir,
         false,
     )?;
-    tracing::info!(%instance_id, %report_id, %severity, "report created");
+    if !offers.is_empty() {
+        db.set_offered_actions(report_id, &serde_json::to_string(&offers)?)?;
+    }
+    tracing::info!(%instance_id, %report_id, %severity, offers=offers.len(), "report created");
     Ok(true)
 }
 
@@ -317,8 +327,11 @@ pub async fn replay_report(
     let analyze_ctx = config::template::build_context_full(
         instance, &items, 0, &since, &recent_reports,
     );
-    let rendered_prompt = config::render_template(&analyze.prompt, &analyze_ctx)
+    let mut rendered_prompt = config::render_template(&analyze.prompt, &analyze_ctx)
         .context("rendering analyze prompt")?;
+    if let Some(extra) = crate::actions::offer_instructions(&instance.config.actions) {
+        rendered_prompt.push_str(&extra);
+    }
 
     let model = model_override
         .or(analyze.model.as_deref())
@@ -339,7 +352,8 @@ pub async fn replay_report(
     let response = invoke_claude(&rendered_prompt, model, allowed_tools, working_dir.as_deref()).await
         .context("claude invocation failed")?;
 
-    let (severity, title, clean_analysis) = parse_response_header(&response.result);
+    let (response_body, offers) = crate::actions::extract_offers(&response.result, &instance.config.actions);
+    let (severity, title, clean_analysis) = parse_response_header(&response_body);
     let source_json = serde_json::to_string(&items).ok();
 
     let report_id = db.insert_report(
@@ -353,6 +367,9 @@ pub async fn replay_report(
         working_dir.as_deref(),
         false,
     )?;
+    if !offers.is_empty() {
+        db.set_offered_actions(report_id, &serde_json::to_string(&offers)?)?;
+    }
 
     Ok(report_id)
 }

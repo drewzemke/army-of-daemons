@@ -22,6 +22,7 @@ pub struct Report {
     pub source_items_json: Option<String>,
     pub session_id: Option<String>,
     pub working_dir: Option<String>,
+    pub offered_actions: Option<String>,
     pub is_read: bool,
     pub is_error: bool,
 }
@@ -129,6 +130,10 @@ impl Database {
         // migration: add working_dir column to reports
         let _ = conn.execute_batch(
             "ALTER TABLE reports ADD COLUMN working_dir TEXT;"
+        );
+        // migration: actions the LLM offered on a report (JSON)
+        let _ = conn.execute_batch(
+            "ALTER TABLE reports ADD COLUMN offered_actions TEXT;"
         );
         Ok(db)
     }
@@ -311,6 +316,11 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_offered_actions(&self, report_id: i64, json: &str) -> Result<()> {
+        self.conn()?.execute("UPDATE reports SET offered_actions=?2 WHERE id=?1", params![report_id, json])?;
+        Ok(())
+    }
+
     pub fn unread_report_ids(&self, instance_id: &str) -> Result<Vec<i64>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT id FROM reports WHERE instance_id=?1 AND is_read=0")?;
@@ -322,7 +332,7 @@ impl Database {
     pub fn get_report(&self, report_id: i64) -> Result<Option<Report>> {
         let conn = self.conn()?;
         let result = conn.query_row(
-            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error
+            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error, offered_actions
              FROM reports WHERE id=?1",
             params![report_id],
             map_report,
@@ -338,7 +348,7 @@ impl Database {
         let conn = self.conn()?;
         let cutoff = display_cutoff_secs(cutoff_secs);
         let mut stmt = conn.prepare(
-            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error
+            "SELECT id, instance_id, created_at, severity, title, dedup_key, analysis, source_items_json, session_id, working_dir, is_read, is_error, offered_actions
              FROM reports WHERE instance_id=?1 AND created_at > ?2
              ORDER BY created_at DESC LIMIT ?3",
         )?;
@@ -540,7 +550,7 @@ impl Database {
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, instance_id, created_at, severity, title, dedup_key,
-                        analysis, source_items_json, session_id, working_dir, is_read, is_error
+                        analysis, source_items_json, session_id, working_dir, is_read, is_error, offered_actions
                  FROM reports WHERE created_at > ?1
                  ORDER BY created_at DESC",
             )?;
@@ -566,6 +576,7 @@ fn map_report(row: &rusqlite::Row) -> rusqlite::Result<Report> {
         source_items_json: row.get(7)?,
         session_id: row.get(8)?,
         working_dir: row.get(9)?,
+        offered_actions: row.get(12)?,
         is_read: row.get::<_, i32>(10)? != 0,
         is_error: row.get::<_, i32>(11)? != 0,
     })
@@ -621,6 +632,16 @@ mod tests {
         for _ in 0..n {
             db.insert_report(instance, severity, None, None, "", None, None, None, false).unwrap();
         }
+    }
+
+    #[test]
+    fn offered_actions_roundtrip() {
+        let db = temp_db();
+        db.upsert_instance("ci", "ci", None).unwrap();
+        let id = db.insert_report("ci", 3, None, None, "", None, None, None, false).unwrap();
+        assert_eq!(db.get_report(id).unwrap().unwrap().offered_actions, None);
+        db.set_offered_actions(id, "[1]").unwrap();
+        assert_eq!(db.get_report(id).unwrap().unwrap().offered_actions.as_deref(), Some("[1]"));
     }
 
     #[test]

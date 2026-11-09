@@ -250,6 +250,21 @@ Set a top-level `body` (and optionally `title`) instead of `[analyze]` to render
 
 Both are rendered with the report's context (`params`, `items`, and `item` for per-item daemons) and run in the background with no TTY, so wrap anything interactive in e.g. `zellij run -- ...`. Action keys must be single characters, unique within the daemon.
 
+### Offered actions
+
+On analyze daemons, an action with `offer = true` only shows up when the LLM offers it on a report. You write the command; the LLM decides whether it applies and fills in its `args`:
+
+```toml
+[[actions]]
+key = "r"
+name = "rerun failed jobs"
+offer = true
+args = ["run_id"]
+command = "gh run rerun {{ args.run_id }} --failed --repo org/{{ params.repo }}"
+```
+
+army appends instructions to the prompt listing the offerable actions, and the LLM ends its response with a fenced `actions` block of `{"action", "args", "reason"}` entries. Offers for unknown actions, with missing or extra args, or with values outside `[A-Za-z0-9._/@:+-]` are dropped. An action offered more than once gets digit keys (`1`, `2`, ...) in the TUI.
+
 ### Reports per run vs per item
 
 By default each run produces one report covering all filtered items (`per = "run"`). With `per = "item"`, each item gets its own report, and templates can use `{{ item }}` in addition to `{{ items }}`.

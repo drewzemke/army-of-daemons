@@ -10,7 +10,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Padding, Paragraph, Wrap};
 use std::path::Path;
 
-use crate::config::{self, ActionConfig, DaemonInstance};
+use crate::config::{self, DaemonInstance};
 use crate::daemon;
 use crate::db::Database;
 
@@ -88,7 +88,7 @@ pub struct App {
     flash: Option<flash::Flash>,
     instances: std::collections::HashMap<String, DaemonInstance>,
     /// set while waiting for an action key after `a`
-    action_mode: Option<(i64, Vec<ActionConfig>)>,
+    action_mode: Option<Vec<crate::actions::Runnable>>,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<CmdResult>,
     cmd_rx: tokio::sync::mpsc::UnboundedReceiver<CmdResult>,
 }
@@ -177,26 +177,19 @@ impl App {
     fn enter_action_mode(&mut self) {
         let Some(id) = self.current_report_id() else { return };
         let Ok(Some(report)) = self.db.get_report(id) else { return };
-        let actions = self.instances.get(&report.instance_id).map(|instance| {
+        let offers: Vec<crate::actions::Offer> = report.offered_actions.as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default();
+        let runnables = self.instances.get(&report.instance_id).map(|instance| {
             let ctx = config::template::build_report_context(instance, &report);
-            crate::actions::available(&instance.config.actions, &ctx)
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>()
+            crate::actions::runnables(&instance.config.actions, &offers, &ctx)
         }).unwrap_or_default();
-        if actions.is_empty() {
+        if runnables.is_empty() {
             self.flash = Some(flash::Flash::info("no actions for this report"));
         } else {
             self.flash = None;
-            self.action_mode = Some((id, actions));
+            self.action_mode = Some(runnables);
         }
-    }
-
-    fn run_action(&mut self, report_id: i64, action: &ActionConfig) {
-        let Ok(Some(report)) = self.db.get_report(report_id) else { return };
-        let Some(instance) = self.instances.get(&report.instance_id) else { return };
-        let ctx = config::template::build_report_context(instance, &report);
-        self.spawn_cmd(action.name.clone(), action.command.clone(), ctx, report.working_dir.clone(), None);
     }
 
     fn drain_cmd_results(&mut self) {
@@ -399,8 +392,8 @@ fn draw(f: &mut Frame, app: &mut App) {
             flash::Level::Error => Color::Red,
         };
         Line::from(Span::styled(format!(" {}", fl.msg), Style::default().fg(color)))
-    } else if let Some((_, ref actions)) = app.action_mode {
-        let hints: Vec<String> = actions.iter().map(|a| format!("{}:{}", a.key, a.name)).collect();
+    } else if let Some(ref runnables) = app.action_mode {
+        let hints: Vec<String> = runnables.iter().map(|r| format!("{}:{}", r.key, r.label)).collect();
         Line::from(vec![
             Span::styled(" action ", Style::default().fg(Color::Black).bg(Color::Yellow)),
             Span::styled(format!("  {}  Esc:cancel", hints.join("  ")), Style::default().fg(Color::Yellow)),
@@ -472,11 +465,14 @@ fn handle_key(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
-    if let Some((report_id, actions)) = app.action_mode.take() {
+    if let Some(runnables) = app.action_mode.take() {
         if let KeyCode::Char(c) = key.code
-            && let Some(action) = actions.iter().find(|a| a.key.starts_with(c))
+            && let Some(r) = runnables.into_iter().find(|r| r.key == c)
         {
-            app.run_action(report_id, action);
+            let working_dir = app.current_report_id()
+                .and_then(|id| app.db.get_report(id).ok().flatten())
+                .and_then(|r| r.working_dir);
+            app.spawn_cmd(r.name, r.command, r.ctx, working_dir, None);
         }
         return;
     }

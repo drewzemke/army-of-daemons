@@ -106,6 +106,12 @@ pub struct ActionConfig {
     pub command: String,
     #[serde(default)]
     pub when: Option<String>,
+    /// only shown when an analyze daemon's LLM offers it on a report
+    #[serde(default)]
+    pub offer: bool,
+    /// values the LLM fills in for an offered action, available as `args.<name>`
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 impl DaemonConfig {
@@ -326,6 +332,23 @@ pub fn validate_daemon(config: &DaemonConfig) -> Result<()> {
         if !keys.insert(&action.key) {
             bail!("daemon '{name}': {label}: duplicate key '{}'", action.key);
         }
+        if action.offer && config.kind() != DaemonKind::Analyze {
+            bail!("daemon '{name}': {label}: offered actions need an [analyze] section");
+        }
+        if !action.offer && !action.args.is_empty() {
+            bail!("daemon '{name}': {label}: `args` only works with offer = true");
+        }
+        for arg in &action.args {
+            let ident = !arg.is_empty() && arg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !ident {
+                bail!("daemon '{name}': {label}: arg {arg:?} must be alphanumeric/underscore");
+            }
+        }
+        let tmpl = env.template_from_str(&action.command)
+            .with_context(|| format!("daemon '{name}': {label} command template error"))?;
+        if !action.offer && tmpl.undeclared_variables(false).contains("args") {
+            bail!("daemon '{name}': {label}: `args` only works with offer = true");
+        }
         templates.push((format!("{label} command"), &action.command));
 
         if let Some(ref when) = action.when {
@@ -478,6 +501,45 @@ command = "true"
             let c = with("", &format!("[[actions]]\nkey = \"{bad}\"\nname = \"a\"\ncommand = \"true\""));
             assert!(validate_daemon(&c).is_err(), "key {bad:?} should be rejected");
         }
+    }
+
+    const OFFER: &str = r#"
+[[actions]]
+key = "r"
+name = "rerun"
+offer = true
+args = ["run_id"]
+command = "gh run rerun {{ args.run_id }}"
+"#;
+
+    #[test]
+    fn offered_actions_validate_on_analyze_daemons() {
+        let c = with("", &format!("[analyze]\nprompt = \"hi\"\n{OFFER}"));
+        validate_daemon(&c).unwrap();
+        let a = &c.actions[0];
+        assert!(a.offer);
+        assert_eq!(a.args, vec!["run_id"]);
+    }
+
+    #[test]
+    fn offered_actions_need_an_analyze_daemon() {
+        assert!(validate_daemon(&with("", OFFER)).is_err());
+        assert!(validate_daemon(&with("body = \"b\"", OFFER)).is_err());
+    }
+
+    #[test]
+    fn args_only_allowed_on_offered_actions() {
+        let c = with("", "[analyze]\nprompt = \"hi\"\n[[actions]]\nkey = \"o\"\nname = \"o\"\ncommand = \"open {{ args.x }}\"");
+        assert!(validate_daemon(&c).is_err());
+        let c = with("", "[analyze]\nprompt = \"hi\"\n[[actions]]\nkey = \"o\"\nname = \"o\"\nargs = [\"x\"]\ncommand = \"true\"");
+        assert!(validate_daemon(&c).is_err());
+    }
+
+    #[test]
+    fn arg_names_must_be_identifiers() {
+        let tail = OFFER.replace("[\"run_id\"]", "[\"run id\"]");
+        let c = with("", &format!("[analyze]\nprompt = \"hi\"\n{tail}"));
+        assert!(validate_daemon(&c).is_err());
     }
 
     #[test]

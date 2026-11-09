@@ -132,6 +132,7 @@ mod tests {
             source_items_json: Some(items.to_string()),
             session_id: None,
             working_dir: None,
+            offered_actions: None,
             is_read: false,
             is_error: false,
         }
