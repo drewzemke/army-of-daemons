@@ -1,7 +1,7 @@
 # Army of Daemons
 
 > [!WARNING]
-> This is a personal tool made with the help of AI. I've made it public in case someone else might get some use out of it.
+> This is a personal tool made with the help of AI. I've made it public in case someone else gets some use out of it, so please read the code before you run it and use it at your own risk. Daemons run shell commands on a schedule, so review any config before you enable it.
 
 A config-driven daemon system that monitors external processes, triages events with LLMs via `claude -p`, and presents results in a terminal UI.
 
