@@ -2,49 +2,40 @@
 
 A config-driven daemon system that monitors external processes, triages events with LLMs via `claude -p`, and presents results in a terminal UI.
 
+Requires the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI on your `PATH`.
+
 ## Quick start
 
 ```sh
 cargo install --path .
-
-# create config directory
 mkdir -p ~/.daemon-army/daemons
-
-# copy an example daemon
-cp examples/pod-errors.toml ~/.daemon-army/daemons/
-
-# validate your configs
-army validate
-
-# run a single daemon once to test
-army check pod-errors
-
-# start the runner (keeps running in foreground)
-army run
-
-# open the TUI (in another terminal)
-army
+# add a daemon spec to ~/.daemon-army/daemons/ (see below), then:
+army validate           # check configs and templates
+army check my-daemon    # run one daemon once
+army run                # start the runner (foreground)
+army                    # open the TUI (in another terminal)
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `army` | Open the TUI dashboard (default) |
+| `army` / `army tui` | Open the TUI dashboard |
 | `army run` | Start the daemon runner in the foreground |
 | `army check <name>` | Run a single daemon or instance once |
-| `army status` | One-line summary for embedding in a status bar |
+| `army dry-run <name>` | Run source + filter, print items as JSON (no LLM call); `--show-prompt` to print the rendered prompt |
 | `army validate` | Validate all daemon configs and templates |
-| `army dry-run <name>` | Run source + filter, print items as JSON (no LLM call) |
+| `army status` | One-line summary for a status bar |
+| `army report <id>` | Print a report (`--json` for JSON) |
 | `army replay <id>` | Re-analyze a report's source data with the current prompt |
-| `army resume <id>` | Resume the claude session from a report |
-| `army export` | Export reports as JSON |
+| `army resume <id>` | Resume the claude session behind a report |
+| `army export` | Export reports as JSON (`--daemon`, `--days`) |
 
 All commands accept `--config-dir <path>` to override the default `~/.daemon-army/`.
 
 ## How it works
 
-The runner executes each daemon on a schedule. Every daemon runs a four-stage pipeline:
+The runner executes each daemon on a schedule through a four-stage pipeline:
 
 ```
 source -> filter -> analyze -> report
@@ -53,206 +44,136 @@ source -> filter -> analyze -> report
 1. **Source**: run a shell command, parse output as structured data
 2. **Filter**: apply field-based rules, deduplicate by key within a time window
 3. **Analyze**: send items to `claude -p` for LLM analysis
-4. **Report**: store the analysis in SQLite with a severity rating
+4. **Report**: store the result in SQLite with a severity rating
 
-The TUI reads from the same SQLite database. It can be opened and closed freely without affecting the runner.
+The TUI reads from the same SQLite database and can be opened and closed freely without affecting the runner.
 
-## Config directory
+## Configuration
 
 ```
 ~/.daemon-army/
-├── config.toml          # global settings (optional)
-├── daemons/             # one TOML file per daemon
-│   ├── pod-errors.toml
-│   └── ...
-└── army.db              # SQLite database (auto-created)
+├── config.toml   # global settings (optional)
+├── daemons/      # one TOML file per daemon
+└── army.db       # SQLite database (auto-created)
 ```
 
-## Global config
-
-`~/.daemon-army/config.toml` — all fields are optional:
+`config.toml` fields, all optional (defaults shown):
 
 ```toml
 db_path = "~/.daemon-army/army.db"
 log_path = "~/.daemon-army/runner.log"
-prune_after_days = 30
-display_after_days = 7
+prune_after_days = 30      # delete reports older than this
+display_after_days = 7     # hide older reports from the TUI and status line
 default_model = "sonnet"
 default_allowed_tools = ""
+max_concurrent = 5
 ```
-
-`display_after_days` hides reports older than this many days from the TUI and status line. They stay in the database until `prune_after_days` elapses (export still sees them).
 
 ## Daemon spec
 
-Each file in `~/.daemon-army/daemons/` defines one daemon. Here's the full schema with every field:
+Each file in `~/.daemon-army/daemons/` defines one daemon. Every field:
 
 ```toml
 name = "my-daemon"
 description = "what this daemon monitors"  # informational only
-schedule = "every 60s"                      # or cron: "*/5 * * * *"
-working_directory = "~/some/path"           # cwd for claude -p (optional)
+schedule = "every 60s"                      # "every 30s|5m|1h" or a cron expression
+working_directory = "~/some/path"           # optional: cwd for source and claude -p
 icon = "GG"                                 # optional: own segment in `army status`
 per = "run"                                 # "run" (one report per run) or "item" (one per item)
-title = "{{ items | length }} things"       # optional: report title (overrides the LLM's title)
+title = "{{ items | length }} things"       # optional: report title (overrides the LLM's)
 body = "..."                                # static daemons only: report body template
+on_read = "some-command {{item.id}}"        # optional: runs when a report is marked read
 
 [source]
-command = "some-command --flag {{params.key}}"  # shell command, rendered as a template
+command = "some-command --flag {{params.key}}"
 format = "jsonl"                            # "jsonl", "json", or "lines"
-success_codes = [0]                         # exit codes that mean success (default: [0])
-max_items = 200                             # truncate to this many items, keeping newest (default: 200)
+success_codes = [0]                         # default: [0]
+max_items = 200                             # keep the newest N items (default: 200)
 
 [source.params]                             # optional: expand into multiple instances
 key = ["value1", "value2"]
 
-[filter]                                    # optional section
-rules = [                                   # optional: field-based filter rules
-  { field = "level", op = "gte", value = 50 }
-]
-dedup_key = "{{item.a}}:{{item.b}}"        # optional: template for deduplication key
-dedup_window = "30m"                        # optional: suppress duplicates within this window
+[filter]                                    # optional
+rules = [{ field = "level", op = "gte", value = 50 }]
+dedup_key = "{{item.a}}:{{item.b}}"
+dedup_window = "30m"
 
-[analyze]                                    # optional: omit for worker daemons (no LLM)
-model = "haiku"                             # optional: override global default_model
-allowed_tools = "Bash(kubectl *)"           # optional: --allowedTools passed to claude
-timeout = "5m"                              # optional: kill analysis after this duration
+[analyze]                                   # optional: omit for worker daemons
+model = "haiku"                             # overrides default_model
+allowed_tools = "Bash(kubectl *)"           # passed to claude as --allowedTools
+timeout = "5m"
 prompt = """
-Your prompt here. Uses Jinja2 syntax (minijinja).
+Your prompt here (minijinja / Jinja2 syntax).
 """
-
-[report]
-notify = true                               # default: true
-
-on_read = "some-command {{item.id}}"        # optional: runs when a report is marked read
 
 [[actions]]                                 # optional: run with `a` + key in the TUI
 key = "o"
 name = "open"
-when = "item.url"                           # optional: minijinja expression; hidden if falsy
+when = "item.url"                           # optional: hidden if this expression is falsy
 command = "open {{item.url}}"
 ```
 
-### Schedule syntax
+### Source formats
 
-- Interval: `every 30s`, `every 5m`, `every 1h`
-- Cron: any standard cron expression like `*/5 * * * *`
+- `jsonl`: each line parsed as JSON; non-JSON lines are skipped
+- `json`: whole output parsed as one value; arrays expand into items
+- `lines`: each non-empty line becomes a string item
 
-### Source format
+### Templates
 
-| Format | Parsing behavior |
-|--------|-----------------|
-| `jsonl` | Each line is parsed as JSON independently. Non-JSON lines are silently skipped. |
-| `json` | Entire output is parsed as one JSON value. Arrays are expanded into items. |
-| `lines` | Each non-empty line becomes a string item. |
-
-### Template variables
-
-Source commands and prompts are rendered with [minijinja](https://github.com/mitsuhiko/minijinja) (Jinja2 syntax). These variables are always available:
+Commands, prompts, and other templates use [minijinja](https://github.com/mitsuhiko/minijinja). Always available:
 
 | Variable | Description |
 |----------|-------------|
-| `{{since}}` | Last successful check time (RFC 3339). On first run, defaults to 24 hours ago. |
-| `{{timestamp}}` | Current time (RFC 3339) |
-| `{{daemon_name}}` | The daemon's name field |
-| `{{instance_id}}` | Full instance ID, e.g. `pod-errors::dashboard` |
-| `{{run_number}}` | Monotonic counter per instance |
+| `since` | Last successful check time (RFC 3339); 24 hours ago on first run |
+| `timestamp` | Current time (RFC 3339) |
+| `daemon_name` | The daemon's `name` |
+| `instance_id` | e.g. `pod-errors::dashboard` |
+| `run_number` | Monotonic counter per instance |
+| `params` | Values from `[source.params]`, e.g. `{{params.repo}}` |
 
-Keys from `[source.params]` are available under `params` (e.g. `{{params.repo}}`).
+After the source runs, templates also get `items` (filtered items), `items_json` (same, as a JSON string), and `count`. `dedup_key` is rendered per item with `item` available, as are all templates when `per = "item"`. Nested fields use dot notation: `{{ item.author.login }}`.
 
-The analyze prompt gets additional variables:
-
-| Variable | Description |
-|----------|-------------|
-| `{{items}}` | List of filtered items (use in `{% for %}` loops) |
-| `{{items_json}}` | Same items serialized as a JSON string |
-| `{{count}}` | Number of items |
-
-Nested item fields are accessed with dot notation: `{{ item.author.login }}`.
-
-`dedup_key` is rendered once per item, with that item available as `item` (e.g. `{{item.id}}`).
-
-Use `{% raw %}...{% endraw %}` to protect sections that contain braces that aren't template syntax (e.g. jj `-T` templates).
+Wrap braces that aren't template syntax (e.g. jj `-T` templates) in `{% raw %}...{% endraw %}`. Note that TOML `"""` strings process escapes, so a literal `\"` in a command needs `\\\"`.
 
 ### Filter rules
 
-Each rule has a `field`, `op`, and optional `value`:
-
-| Operator | Description |
-|----------|-------------|
-| `eq` | Equals (string or numeric) |
-| `neq` | Not equals |
-| `gt` | Greater than (numeric) |
-| `gte` | Greater than or equal (numeric) |
-| `lt` | Less than (numeric) |
-| `lte` | Less than or equal (numeric) |
-| `contains` | String contains substring |
-| `matches` | Regex match |
-| `exists` | Field is present (no value needed) |
-
-Fields use dot notation for nested access: `errors.0.message` accesses the first element's `message` field.
-
-Type coercion: if both values parse as numbers, comparison is numeric. Otherwise string.
+Each rule has a `field` (dot notation, e.g. `errors.0.message`), an `op`, and usually a `value`. Ops: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `matches` (regex), `exists` (no value). Comparison is numeric when both sides parse as numbers, otherwise string.
 
 ### Dedup
 
-Dedup prevents the same event from generating repeated reports. When `dedup_key` is set, each item's key is rendered from the template and checked against a `seen_keys` table in the database.
-
-- All items that pass dedup are marked as seen immediately, before analysis runs.
-- `dedup_window` controls how long a key is remembered. After the window elapses, the same key can trigger a new report.
-- If a dedup key template renders to an empty string (e.g. typo in field name), the item is kept and a warning is logged.
-
-Choose your dedup key based on what makes an event unique:
-- Commit hash for git commits
-- PR number for pull requests
-- `operationName:message` for log errors
-- Some combination of fields that identifies "the same thing happened again"
+When `dedup_key` is set, each item's key is checked against previously seen keys, and items that pass are marked seen immediately (before analysis). Keys expire after `dedup_window`. If a key renders empty (e.g. a typo'd field name), the item is kept and a warning is logged.
 
 ### Params and instances
 
-When `[source.params]` is defined, the daemon is expanded into independent instances via cartesian product. For example:
+`[source.params]` expands a daemon into independent instances via cartesian product. `repo = ["api", "web"]` and `env = ["staging", "prod"]` produce four instances (`my-daemon::api,staging`, ...), each with its own schedule, dedup state, and reports.
 
-```toml
-[source.params]
-repo = ["api", "web"]
-env = ["staging", "prod"]
+### Daemon kinds
+
+- **Analyze** (has `[analyze]`): items go to `claude -p`, the response becomes the report.
+- **Static** (has top-level `body`): reports are rendered from templates, no LLM, no severity. Can't be combined with `[analyze]`.
+- **Worker** (neither): just runs the source command on schedule, e.g. `jj fetch` across repos. Shows up in the TUI with its last-checked time; source failures still produce error reports.
+
+### Prompt requirements
+
+Analyze prompts **must** tell the LLM to begin its response with:
+
+```
+# Report: <short title>
+Severity: <N>
 ```
 
-This produces four instances: `my-daemon::api,staging`, `my-daemon::api,prod`, `my-daemon::web,staging`, `my-daemon::web,prod`. Each instance has its own schedule, dedup state, and reports.
+where N is 1-5. The header is parsed and stripped from the stored report. Unparseable severity defaults to 3.
 
-### Worker daemons
-
-Omit the `[analyze]` section to create a worker daemon that just runs a command on schedule without LLM analysis. Useful for maintenance tasks like fetching repos or cleaning caches.
-
-```toml
-name = "jj-fetch"
-description = "fetch latest commits"
-schedule = "every 10m"
-working_directory = "~/projects/{{params.repo}}"
-
-[source]
-command = "jj fetch"
-format = "lines"
-
-[source.params]
-repo = ["api", "web", "infra"]
-```
-
-Worker daemons still show up in the TUI with their last-checked time, and source failures still produce error reports.
-
-### Static daemons
-
-Set a top-level `body` (and optionally `title`) instead of `[analyze]` to render reports from templates without an LLM. Static reports have no severity. `body` and `[analyze]` can't be combined.
+The prompt is piped to claude via stdin. `ANTHROPIC_API_KEY` is stripped from the child environment so claude uses your interactive login rather than API credits.
 
 ### Actions and on_read
 
 `[[actions]]` are shell commands you can run on a report from the TUI: press `a`, then the action's key. `on_read` runs whenever a report goes from unread to read; if it fails, the report is marked unread again and the error shows in the bottom bar.
 
-Both are rendered with the report's context (`params`, `items`, and `item` for per-item daemons) and run in the background with no TTY, so wrap anything interactive in e.g. `zellij run -- ...`. Action keys must be single characters, unique within the daemon.
+Both get the report's template context and run in the background with no TTY, so wrap anything interactive in e.g. `zellij run -- ...`. Action keys must be single characters, unique within the daemon.
 
-### Offered actions
-
-On analyze daemons, an action with `offer = true` only shows up when the LLM offers it on a report. You write the command; the LLM decides whether it applies and fills in its `args`:
+On analyze daemons, an action with `offer = true` only appears when the LLM offers it on a report. You write the command; the LLM decides whether it applies and fills in its `args`:
 
 ```toml
 [[actions]]
@@ -263,69 +184,38 @@ args = ["run_id"]
 command = "gh run rerun {{ args.run_id }} --failed --repo org/{{ params.repo }}"
 ```
 
-army appends instructions to the prompt listing the offerable actions, and the LLM ends its response with a fenced `actions` block of `{"action", "args", "reason"}` entries. Offers for unknown actions, with missing or extra args, or with values outside `[A-Za-z0-9._/@:+-]` are dropped. An action offered more than once gets digit keys (`1`, `2`, ...) in the TUI.
-
-### Reports per run vs per item
-
-By default each run produces one report covering all filtered items (`per = "run"`). With `per = "item"`, each item gets its own report, and templates can use `{{ item }}` in addition to `{{ items }}`.
-
-### Prompt requirements
-
-Every prompt **must** instruct the LLM to begin its response with this header:
-
-```
-# Report: <short title>
-Severity: <N>
-```
-
-Where N is 1-5. The runner parses this header to extract the report title and severity. The header is stripped from the stored report — only the body is kept.
-
-If the LLM doesn't produce a parseable severity, it defaults to 3.
-
-### The `claude -p` invocation
-
-The prompt is piped to claude via stdin (not as a CLI argument) to avoid shell escaping issues and argument length limits. `ANTHROPIC_API_KEY` is stripped from the child process environment so claude always uses interactive auth (e.g. a team plan), never personal API credits.
+army appends the offerable actions to the prompt, and the LLM ends its response with a fenced `actions` block of `{"action", "args", "reason"}` entries. Offers for unknown actions, with missing or extra args, or with values outside `[A-Za-z0-9._/@:+-]` are dropped. An action offered more than once gets digit keys (`1`, `2`, ...).
 
 ## TUI keybindings
 
+Press `?` in the TUI for the full list.
+
 | Key | Action |
 |-----|--------|
-| `j`/`k` or arrows | Navigate |
+| `j`/`k` or arrows | Navigate / scroll |
 | `Enter` | Drill into daemon / open report |
 | `Esc` / `q` | Back / quit |
-| `r` | Mark report as read |
-| `R` | Mark all read for this daemon |
-| `y` | Copy report ID to clipboard |
-| `a` | Run one of the report's actions (then press its key, `Esc` to cancel) |
-| `Y` | Copy report content to clipboard |
-| `x` | Manually trigger a daemon run |
+| `r` / `u` | Mark read / unread (`r` on the dashboard marks all read) |
+| `R` | Mark all read (daemon view) / resume claude session (report view) |
+| `D` | Delete report |
+| `a` | Run an action (then its key; `Esc` cancels) |
+| `y` | Copy report content |
+| `i` | Copy claude session ID |
+| `s` | Toggle source data |
+| `d` | Dry-run daemon |
+| `x` | Run daemon now |
+| `t` | Cycle time range |
 | `/` | Search / filter |
-| `?` | Help |
 
-## Status bar integration
+## Status bar
 
-`army status` prints a single line like `🔴 3 | 🟡 2` showing unread counts by severity. If there are no unreads, it prints `✅`. Daemons with an `icon` get their own segment (`GG 4 | 🔴 3`), and static reports from daemons without one are counted under `■`. This is designed to be embedded in a terminal status bar (zellij, tmux, etc.).
+`army status` prints a line like `🔴 3 | 🟡 2` of unread counts by severity, or `✅` when there are none. Daemons with an `icon` get their own segment (`GG 4 | 🔴 3`), and static reports from daemons without one count under `■`. Embed it in zellij, tmux, etc.
 
-## Runner details
+## Runner behavior
 
-- **Hot-reload**: the runner watches `~/.daemon-army/daemons/` for changes. Add, edit, or delete TOML files without restarting. Rename to `.toml.disabled` to temporarily disable a daemon.
-- **Backpressure**: if a daemon instance is still running when its next scheduled tick fires, the tick is skipped.
-- **Graceful shutdown**: Ctrl-C waits for in-flight analyses to complete, then exits.
-- **Pruning**: reports older than `prune_after_days` are deleted daily.
-- **Logging**: the runner logs to `log_path` (default `~/.daemon-army/runner.log`). Set `RUST_LOG=debug` for verbose output.
-- **Heartbeat**: the runner writes a heartbeat to SQLite every 30 seconds. The TUI shows a warning if the heartbeat is stale.
-
-## TOML quoting tips
-
-TOML's `"""triple quotes"""` process escape sequences (`\"` becomes `"`). If your source command contains literal backslash-quotes (common with jj `-T` templates), you need to double-escape: `\\\"` in the TOML file produces `\"` in the rendered command.
-
-If a section of your command has braces that aren't minijinja template syntax, wrap it in `{% raw %}...{% endraw %}`.
-
-## Examples
-
-See the `examples/` directory for working daemon configs:
-
-- `pod-errors.toml` — monitor Kubernetes pod error logs
-- `teammate-commits.toml` — summarize teammate commits via jj
-- `new-prs.toml` — full code review of new pull requests with opus
-- `ci-failures.toml` — monitor GitHub Actions failures
+- **Hot-reload**: changes in `daemons/` apply without a restart. Rename a file to `.toml.disabled` to disable it.
+- **Backpressure**: a tick is skipped if the instance is still running from the last one.
+- **Graceful shutdown**: Ctrl-C waits for in-flight analyses to finish.
+- **Pruning**: reports past `prune_after_days` are deleted daily.
+- **Logging**: to `log_path`; set `RUST_LOG=debug` for more.
+- **Heartbeat**: written every 30s; the TUI warns when it's stale.
