@@ -1,4 +1,7 @@
-# army-of-daemons
+# Army of Daemons
+
+> [!WARNING]
+> This is a personal tool made with the help of AI. I've made it public in case someone else might get some use out of it.
 
 A config-driven daemon system that monitors external processes, triages events with LLMs via `claude -p`, and presents results in a terminal UI.
 
